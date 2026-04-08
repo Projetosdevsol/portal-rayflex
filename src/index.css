@@ -1,0 +1,237 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-brand-50: #f7f7f7;
+  --color-brand-100: #e6e6e6;
+  --color-brand-200: #cccccc;
+  --color-brand-300: #b3b3b3;
+  --color-brand-400: #808080;
+  --color-brand-500: #333333;
+  --color-brand-600: #2b2b2b;
+  --color-brand-700: #242424;
+  --color-brand-800: #1c1c1c;
+  --color-brand-900: #141414;
+
+  --color-accent-50: #fef2f2;
+  --color-accent-100: #fee2e2;
+  --color-accent-200: #fecaca;
+  --color-accent-300: #fca5a5;
+  --color-accent-400: #f87171;
+  --color-accent-500: #D30A11;
+  --color-accent-600: #b91c1c;
+  --color-accent-700: #991b1b;
+}
+
+@layer base {
+  :root {
+    --bg-primary: #FFFFFF;
+    --bg-secondary: #F8F9FA;
+    --text-primary: #1F2937;
+    --text-secondary: #6B7280;
+    --brand-primary: #333333;
+    --accent-primary: #D30A11;
+    --border-color: #E5E7EB;
+    --ink: #000000;
+    --font-size-base: 16px;
+
+    /* Button Colors */
+    --btn-primary-bg: var(--brand-primary);
+    --btn-primary-text: #FFFFFF;
+    --btn-secondary-bg: #FFFFFF;
+    --btn-secondary-text: var(--text-primary);
+    --btn-secondary-border: var(--border-color);
+
+    /* Status Colors */
+    --status-success: #10B981;
+    --status-warning: #F59E0B;
+    --status-error: #EF4444;
+    --status-info: #3B82F6;
+
+    --status-pending-bg: #FEF3C7;
+    --status-pending-text: #92400E;
+    --status-progress-bg: #DBEAFE;
+    --status-progress-text: #1E40AF;
+    --status-completed-bg: #D1FAE5;
+    --status-completed-text: #065F46;
+    --status-cancelled-bg: #FEE2E2;
+    --status-cancelled-text: #991B1B;
+  }
+
+  .theme-dark {
+    --bg-primary: #0F172A;
+    --bg-secondary: #1E293B;
+    --text-primary: #F8FAFC;
+    --text-secondary: #94A3B8;
+    --brand-primary: #F8FAFC;
+    --accent-primary: #EF4444;
+    --border-color: #334155;
+    --ink: #000000;
+
+    /* Button Colors Dark */
+    --btn-primary-bg: var(--accent-primary);
+    --btn-primary-text: #FFFFFF;
+    --btn-secondary-bg: #1E293B;
+    --btn-secondary-text: #F8FAFC;
+    --btn-secondary-border: #334155;
+
+    /* Status Colors Dark */
+    --status-success: #34D399;
+    --status-warning: #FBBF24;
+    --status-error: #F87171;
+    --status-info: #60A5FA;
+
+    --status-pending-bg: rgba(251, 191, 36, 0.1);
+    --status-pending-text: #FBBF24;
+    --status-progress-bg: rgba(59, 130, 246, 0.1);
+    --status-progress-text: #60A5FA;
+    --status-completed-bg: rgba(16, 185, 129, 0.1);
+    --status-completed-text: #34D399;
+    --status-cancelled-bg: rgba(239, 68, 68, 0.1);
+    --status-cancelled-text: #F87171;
+  }
+
+  .font-small { --font-size-base: 14px !important; }
+  .font-medium { --font-size-base: 16px !important; }
+  .font-large { --font-size-base: 18px !important; }
+  .font-extra { --font-size-base: 20px !important; }
+
+  html {
+    font-size: var(--font-size-base);
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition: font-size 0.3s ease;
+  }
+
+  body {
+    @apply bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans antialiased;
+    font-size: 1rem;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    min-height: 100vh;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background-color: var(--bg-secondary);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--text-secondary);
+    border-radius: 9999px;
+    border: 2px solid var(--bg-primary);
+  }
+
+  /* Firefox */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-secondary) var(--bg-secondary);
+  }
+
+  /* Horizontal Scroll Utility */
+  .scroll-horizontal {
+    @apply overflow-x-auto scroll-smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .scrollbar-thin {
+    scrollbar-width: thin;
+  }
+}
+
+.glass-panel {
+  background-color: color-mix(in srgb, var(--bg-primary), transparent 20%);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px 0 rgba(0,0,0,0.05);
+}
+
+.card-minimal {
+  background-color: var(--bg-primary);
+  border-radius: 1rem;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  transition: all 0.3s ease;
+}
+
+.card-minimal:hover {
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.input-minimal {
+  width: 100%;
+  padding: 0.625rem 1rem;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  color: var(--text-primary);
+  transition: all 0.2s ease;
+  outline: none;
+  font-size: 0.875rem;
+}
+
+.input-minimal:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary), transparent 90%);
+}
+
+.input-minimal::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+}
+
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: var(--btn-primary-bg);
+  color: var(--btn-primary-text);
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.75rem;
+  font-weight: 700;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary:hover {
+  filter: brightness(1.1);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+}
+
+.btn-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background-color: var(--btn-secondary-bg);
+  color: var(--btn-secondary-text);
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--btn-secondary-border);
+  font-weight: 700;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+.btn-secondary:hover {
+  background-color: var(--bg-secondary);
+  border-color: var(--text-secondary);
+}
+
+.btn-secondary:active {
+  transform: scale(0.98);
+}

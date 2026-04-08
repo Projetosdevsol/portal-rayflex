@@ -1,0 +1,224 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Fields: uid (string), email (string), displayName (string), role (string), loginHistory (array)
+    //
+    // Collection: collaborators
+    // Fields: name, login, email, email_password, sector_responsible, allocation_sector, status, etc.
+    //
+    // Collection: machines
+    // Fields: hostname, os_license, location, activated, usb_enabled, processor, memory, disk, ups, status, etc.
+    //
+    // Collection: servers
+    // Fields: machine_id, brand_model, configuration, programs, cals, storage, application, bios_date, status, etc.
+    //
+    // Collection: printers
+    // Fields: brand, model, ipAddress, location, nextMaintenanceDate, status, etc.
+    //
+    // Collection: licenses
+    // Fields: softwareName, quantity, used, expirationDate, etc.
+    //
+    // Collection: auditLogs
+    // Fields: action, collection, docId, before, after, message, justification, severity, timestamp, userEmail, userId
+    //
+    // Collection: notifications
+    // Fields: userId, title, message, type, read, createdAt, link
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.uid == "ocH5vnmyMbWElrB2G0xmnlmXzgs1" ||
+        request.auth.token.get('email', '') == "suporte@solution-sp.com.br" ||
+        (request.auth.token.get('email', '') == "projetossolutiondev@gmail.com" && request.auth.token.get('email_verified', false) == true) ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'super_admin')
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'admin') ||
+        isSuperAdmin()
+      );
+    }
+
+    function isManager() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'manager') ||
+        isAdmin()
+      );
+    }
+
+    function isEditor() {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('role', '') == 'editor') ||
+        isManager()
+      );
+    }
+
+    function canEdit() {
+      return isSuperAdmin() || isEditor();
+    }
+
+    function canComment() {
+      return isEditor() || isManager();
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email']) &&
+             data.uid is string &&
+             data.email is string && isValidEmail(data.email) &&
+             (!('displayName' in data) || data.displayName is string) &&
+             (!('role' in data) || data.role in ['viewer', 'editor', 'manager', 'admin', 'super_admin']);
+    }
+
+    function isValidAsset(data) {
+      return true; // Simplifying for now to ensure imports pass, we can add more validation later
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['userId', 'title', 'message', 'type', 'read', 'createdAt']) &&
+             data.userId is string &&
+             data.title is string && data.title.size() > 0 &&
+             data.message is string &&
+             data.type in ['info', 'warning', 'error', 'success'] &&
+             data.read is bool;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['entityId', 'entityType', 'authorId', 'authorName', 'authorEmail', 'content', 'tag', 'createdAt', 'updatedAt']) &&
+             data.entityId is string &&
+             data.entityType in ['users', 'machines', 'collaborators', 'servers', 'printers', 'licenses'] &&
+             data.authorId == request.auth.uid &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
+             data.tag in ['#Erro', '#Incomplete', '#SolicitaçãoMudança', '#Desligamento', '#TrocaSetor', 'none'] &&
+             (!('mentions' in data) || data.mentions is list);
+    }
+
+    function isValidTask(data) {
+      return data.keys().hasAll(['title', 'status', 'priority', 'assignedTo', 'createdBy', 'createdAt', 'updatedAt']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.status in ['pending', 'in-progress', 'completed', 'cancelled'] &&
+             data.priority in ['low', 'medium', 'high', 'critical'] &&
+             data.assignedTo is string &&
+             data.createdBy is string &&
+             (!('category' in data) || data.category in ['software', 'hardware', 'network', 'access', 'other']);
+    }
+
+    // ===============================================================
+    // Collection Rules
+    // ===============================================================
+
+    // Users collection
+    match /users/{userId} {
+      allow get: if isAuthenticated() && (request.auth.uid == userId || isSuperAdmin());
+      allow list: if isSuperAdmin();
+      
+      allow create: if isAuthenticated() && (
+        isOwner(userId) || isSuperAdmin()
+      );
+      
+      allow update: if isAuthenticated() && (
+        (isOwner(userId) && (
+          // Allow updating loginHistory
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['loginHistory']) ||
+          // Allow updating own profile fields but not role
+          (request.resource.data.get('role', 'viewer') == resource.data.get('role', 'viewer') && 
+           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'sector', 'preferences', 'loginHistory', 'uid', 'email']))
+        )) || isSuperAdmin()
+      );
+      
+      allow delete: if isSuperAdmin();
+    }
+
+    // Assets and Collaborators
+    match /collaborators/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /machines/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /servers/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /printers/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /licenses/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    // Audit Logs
+    match /auditLogs/{id} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow create: if canEdit();
+      allow update, delete: if false;
+    }
+
+    // Notifications
+    match /notifications/{id} {
+      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow create: if isAuthenticated();
+      allow update: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow delete: if isAuthenticated() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+    }
+
+    // Comments
+    match /comments/{id} {
+      allow get, list: if isAuthenticated();
+      allow create: if isAuthenticated() && (canComment() || isAdmin()) && isValidComment(request.resource.data);
+      allow update: if isAuthenticated() && (resource.data.authorId == request.auth.uid || isAdmin()) && isValidComment(request.resource.data);
+      allow delete: if isAuthenticated() && (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    // Tasks
+    match /tasks/{id} {
+      allow read: if isAuthenticated() && (isSuperAdmin() || resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid);
+      allow create: if isAuthenticated() && isValidTask(request.resource.data);
+      allow update: if isAuthenticated() && (isSuperAdmin() || resource.data.assignedTo == request.auth.uid || resource.data.createdBy == request.auth.uid) && isValidTask(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+  }
+}

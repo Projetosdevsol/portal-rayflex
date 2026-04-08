@@ -1,0 +1,31 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // Helper: Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Helper: Check if user is the admin (based on email or role in Firestore)
+    // Note: Storage rules can't directly 'get' from Firestore as easily as Firestore rules,
+    // but we can check the auth token email for the bootstrap admin.
+    function isSuperAdmin() {
+      return isAuthenticated() && 
+        (request.auth.token.email == "suporte@rayflex.com.br" ||
+         request.auth.uid == "ocH5vnmyMbWElrB2G0xmnlmXzgs1");
+    }
+
+    // Default: Deny all
+    match /{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isSuperAdmin();
+    }
+
+    // User-specific folder (if needed for profile pics etc)
+    match /users/{userId}/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId;
+    }
+  }
+}

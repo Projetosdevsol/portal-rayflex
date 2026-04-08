@@ -1,0 +1,212 @@
+{
+  "entities": {
+    "collaborator": {
+      "title": "Collaborator",
+      "description": "A company employee who uses IT assets.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Nome" },
+        "machine_id": { "type": "string", "$ref": "machine", "description": "ID Máquina" },
+        "login": { "type": "string", "description": "Login" },
+        "login_password": { "type": "string", "description": "Senha do Login" },
+        "network_group": { "type": "string", "description": "Grupo da Rede" },
+        "email": { "type": "string", "format": "email", "description": "E-mail" },
+        "alias_creation": { "type": "string", "description": "Criação de Alias" },
+        "email_password": { "type": "string", "description": "Senha e-mail" },
+        "forwarding": { "type": "string", "description": "Encaminhamentos" },
+        "sector_responsible": { "type": "string", "description": "Setor/Responsável" },
+        "allocation_sector": { "type": "string", "description": "Setor/Responsável Alocado" },
+        "unit": { "type": "string", "description": "Unidade" },
+        "office_license": { "type": "string", "description": "Licença do Office" },
+        "autodesk_credentials": { "type": "string", "description": "Credenciais Autodesk (User/Pass)" },
+        "status": { "type": "string", "enum": ["active", "inactive", "deactivated"], "description": "Status" }
+      },
+      "required": ["name", "status"]
+    },
+    "machine": {
+      "title": "Machine",
+      "description": "A computer or laptop asset.",
+      "type": "object",
+      "properties": {
+        "hostname": { "type": "string", "description": "Máquinas (Hostname)" },
+        "collaborator_id": { "type": "string", "$ref": "collaborator", "description": "Colaborador Responsável" },
+        "invoiceNumber": { "type": "string", "description": "Número NF" },
+        "danfeKey": { "type": "string", "description": "Chave Danfe" },
+        "serialNumber": { "type": "string", "description": "Número de Série" },
+        "biosDate": { "type": "string", "format": "date", "description": "Data da BIOS" },
+        "os_license": { "type": "string", "description": "Licença SO Windows (Instaled/OEM Key)" },
+        "osVersion": { "type": "string", "description": "Versão do SO" },
+        "unit": { "type": "string", "description": "Unidade" },
+        "location": { "type": "string", "description": "Local" },
+        "activated": { "type": "string", "description": "Ativada?" },
+        "usb_enabled": { "type": "string", "description": "USB?" },
+        "processor": { "type": "string", "description": "Processador" },
+        "memory": { "type": "string", "description": "Memória" },
+        "disk": { "type": "string", "description": "Disco" },
+        "ups": { "type": "string", "description": "Nobreak?" },
+        "notes": { "type": "string", "description": "Anotações" },
+        "status": { "type": "string", "enum": ["available", "in-use", "maintenance", "retired", "deactivated"], "description": "Status" }
+      },
+      "required": ["hostname", "status"]
+    },
+    "server": {
+      "title": "Server",
+      "description": "A server asset.",
+      "type": "object",
+      "properties": {
+        "machine_id": { "type": "string", "$ref": "machine", "description": "ID Máquinas" },
+        "brand_model": { "type": "string", "description": "Marca/Modelo" },
+        "configuration": { "type": "string", "description": "Configuração" },
+        "programs": { "type": "string", "description": "Programas" },
+        "cals": { "type": "string", "description": "CALs" },
+        "storage": { "type": "string", "description": "Armazenamento" },
+        "application": { "type": "string", "description": "Aplicação" },
+        "bios_date": { "type": "string", "description": "Data da BIOS" },
+        "unit": { "type": "string", "description": "Unidade" },
+        "status": { "type": "string", "enum": ["online", "offline", "maintenance"], "description": "Status" }
+      },
+      "required": ["machine_id", "status"]
+    },
+    "printer": {
+      "title": "Printer",
+      "description": "A printer asset.",
+      "type": "object",
+      "properties": {
+        "brand": { "type": "string", "description": "Marca" },
+        "model": { "type": "string", "description": "Modelo" },
+        "connectionType": { "type": "string", "enum": ["USB", "WIFI", "Cabo de rede"], "description": "Tipo de Conexão" },
+        "ipAddress": { "type": "string", "description": "Endereço IP/Compartilhamento" },
+        "location": { "type": "string", "description": "Localização" },
+        "unit": { "type": "string", "description": "Unidade" },
+        "status": { "type": "string", "enum": ["online", "offline", "maintenance"], "description": "Status" },
+        "nextMaintenanceDate": { "type": "string", "format": "date", "description": "Próxima Manutenção" }
+      },
+      "required": ["brand", "model", "connectionType", "ipAddress", "status"]
+    },
+    "license": {
+      "title": "Software License",
+      "description": "A software license or subscription.",
+      "type": "object",
+      "properties": {
+        "softwareName": { "type": "string", "enum": ["Office", "Produtos Autodesk", "Solidworks"], "description": "Nome do Software" },
+        "assignedUserIds": { 
+          "type": "array", 
+          "items": { "type": "string", "$ref": "collaborator" }, 
+          "description": "Usuários Atribuídos" 
+        },
+        "licenseKey": { "type": "string", "description": "Chave de Licença" },
+        "expirationDate": { "type": "string", "format": "date", "description": "Data de Expiração" },
+        "quantity": { "type": "integer", "description": "Quantidade de Usuários Permitidos" },
+        "used": { "type": "integer", "description": "Em uso (Calculado)" },
+        "unit": { "type": "string", "description": "Unidade" }
+      },
+      "required": ["softwareName", "licenseKey", "quantity"]
+    },
+    "auditLog": {
+      "title": "Audit Log",
+      "description": "A record of a change made in the system.",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "string", "format": "date-time" },
+        "userId": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "action": { "type": "string", "enum": ["create", "update", "delete"] },
+        "entityType": { "type": "string" },
+        "entityId": { "type": "string" },
+        "before": { "type": "object" },
+        "after": { "type": "object" }
+      },
+      "required": ["timestamp", "userId", "userEmail", "action", "entityType", "entityId"]
+    },
+    "user": {
+      "title": "User Profile",
+      "description": "Information about a system user.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["viewer", "editor", "manager", "admin", "super_admin"] },
+        "permissions": { "type": "array", "items": { "type": "string" } },
+        "sector": { "type": "string" },
+        "loginHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "timestamp": { "type": "string", "format": "date-time" },
+              "ipAddress": { "type": "string" }
+            },
+            "required": ["timestamp", "ipAddress"]
+          }
+        }
+      },
+      "required": ["uid", "email", "displayName", "role"]
+    },
+    "notification": {
+      "title": "Notification",
+      "description": "A system alert or notification.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "type": { "type": "string", "enum": ["info", "warning", "error", "success"] },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "link": { "type": "string" }
+      },
+      "required": ["userId", "title", "message", "type", "read", "createdAt"]
+    },
+    "comment": {
+      "title": "Comment",
+      "description": "A comment or request made on an entity.",
+      "type": "object",
+      "properties": {
+        "entityId": { "type": "string" },
+        "entityType": { "type": "string", "enum": ["users", "machines", "collaborators", "servers", "printers", "licenses"] },
+        "authorId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorEmail": { "type": "string" },
+        "content": { "type": "string" },
+        "tag": { "type": "string", "enum": ["#Erro", "#Incomplete", "#SolicitaçãoMudança", "#Desligamento", "#TrocaSetor", "none"] },
+        "mentions": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["entityId", "entityType", "authorId", "authorName", "authorEmail", "content", "tag", "createdAt", "updatedAt"]
+    },
+    "task": {
+      "title": "Task",
+      "description": "An IT-related task assigned to a user.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Título da Tarefa" },
+        "description": { "type": "string", "description": "Descrição" },
+        "status": { "type": "string", "enum": ["pending", "in-progress", "completed", "cancelled"], "description": "Status" },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Prioridade" },
+        "assignedTo": { "type": "string", "description": "ID do Usuário Atribuído" },
+        "assignedToName": { "type": "string", "description": "Nome do Usuário Atribuído" },
+        "createdBy": { "type": "string", "description": "ID do Criador" },
+        "createdByName": { "type": "string", "description": "Nome do Criador" },
+        "dueDate": { "type": "string", "format": "date", "description": "Data de Vencimento" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "category": { "type": "string", "enum": ["software", "hardware", "network", "access", "other"], "description": "Categoria" }
+      },
+      "required": ["title", "status", "priority", "assignedTo", "createdBy", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "collaborators": { "schema": "collaborator", "description": "List of collaborators" },
+    "machines": { "schema": "machine", "description": "List of machines" },
+    "servers": { "schema": "server", "description": "List of servers" },
+    "printers": { "schema": "printer", "description": "List of printers" },
+    "licenses": { "schema": "license", "description": "List of licenses" },
+    "auditLogs": { "schema": "auditLog", "description": "System audit logs" },
+    "users": { "schema": "user", "description": "System user profiles" },
+    "notifications": { "schema": "notification", "description": "User notifications" },
+    "comments": { "schema": "comment", "description": "Entity comments and requests" },
+    "tasks": { "schema": "task", "description": "IT tasks management" }
+  }
+}
