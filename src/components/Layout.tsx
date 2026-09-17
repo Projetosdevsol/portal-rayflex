@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Users, 
-  Monitor, 
-  Server, 
-  Printer, 
-  Key, 
+import {
+  LayoutDashboard,
+  Users,
+  Monitor,
+  Server,
+  Printer,
+  PlugZap,
+  Key,
   History, 
   LogOut,
   Menu,
@@ -15,6 +16,7 @@ import {
   ShieldCheck,
   CheckSquare,
   FileText,
+  Building2,
   Settings as SettingsIcon,
   ChevronDown,
   ChevronRight
@@ -116,6 +118,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         { to: '/machines', icon: Monitor, label: 'Máquinas' },
         { to: '/servers', icon: Server, label: 'Servidores' },
         { to: '/printers', icon: Printer, label: 'Impressoras' },
+        { to: '/ups', icon: PlugZap, label: 'Nobreaks' },
         { to: '/licenses', icon: Key, label: 'Licenças', roles: ['editor', 'super_admin', 'admin', 'manager'] },
       ]
     },
@@ -124,6 +127,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       icon: CheckSquare,
       children: [
         { to: '/tasks', icon: CheckSquare, label: 'Tarefas', roles: ['super_admin'] },
+        { to: '/units', icon: Building2, label: 'Unidades', roles: ['editor', 'super_admin', 'admin', 'manager'] },
         { to: '/reports', icon: FileText, label: 'Relatórios', roles: ['editor', 'super_admin', 'admin', 'manager'] },
         { to: '/users', icon: ShieldCheck, label: 'Usuários', roles: ['super_admin'] },
         { to: '/audit-reports', icon: History, label: 'Auditoria', roles: ['super_admin'] },

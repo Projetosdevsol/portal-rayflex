@@ -16,6 +16,17 @@ service firebase.storage {
          request.auth.uid == "ocH5vnmyMbWElrB2G0xmnlmXzgs1");
     }
 
+    // Fotos de ativos (impressoras, nobreaks, etc.): qualquer usuário autenticado pode
+    // ler; upload/remoção segue a mesma lógica de edição de ativos (qualquer
+    // autenticado; o controle fino de editor/admin é feito nas regras do Firestore).
+    match /assets/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow create, update: if isAuthenticated()
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+      allow delete: if isAuthenticated();
+    }
+
     // Default: Deny all
     match /{allPaths=**} {
       allow read: if isAuthenticated();

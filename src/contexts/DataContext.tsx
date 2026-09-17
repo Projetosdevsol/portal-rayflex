@@ -8,7 +8,9 @@ interface DataContextType {
   machines: any[];
   servers: any[];
   printers: any[];
+  ups: any[];
   licenses: any[];
+  units: any[];
   loading: boolean;
   getReferencedData: (refName: string) => any[];
 }
@@ -21,7 +23,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [machines, setMachines] = useState<any[]>([]);
   const [servers, setServers] = useState<any[]>([]);
   const [printers, setPrinters] = useState<any[]>([]);
+  const [ups, setUps] = useState<any[]>([]);
   const [licenses, setLicenses] = useState<any[]>([]);
+  const [units, setUnits] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -35,7 +39,9 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       { name: 'machines', setter: setMachines },
       { name: 'servers', setter: setServers },
       { name: 'printers', setter: setPrinters },
+      { name: 'ups', setter: setUps },
       { name: 'licenses', setter: setLicenses },
+      { name: 'units', setter: setUnits },
     ];
 
     const unsubscribes = collections.map(col => {
@@ -66,9 +72,16 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
       case 'printer':
       case 'printers':
         return printers;
+      case 'ups':
+      case 'nobreak':
+      case 'nobreaks':
+        return ups;
       case 'license':
       case 'licenses':
         return licenses;
+      case 'unit':
+      case 'units':
+        return units;
       default:
         return [];
     }
@@ -76,11 +89,13 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <DataContext.Provider value={{ 
-      collaborators, 
-      machines, 
-      servers, 
-      printers, 
-      licenses, 
+      collaborators,
+      machines,
+      servers,
+      printers,
+      ups,
+      licenses,
+      units,
       loading,
       getReferencedData
     }}>

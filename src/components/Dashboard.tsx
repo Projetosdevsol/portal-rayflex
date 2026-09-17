@@ -1,12 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { collection, query, limit, orderBy, onSnapshot } from 'firebase/firestore';
 import { db, formatDate, handleFirestoreError, OperationType } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { 
-  Monitor, 
-  Server, 
-  Printer, 
-  Key, 
+import { useData } from '../contexts/DataContext';
+import {
+  Monitor,
+  Server,
+  Printer,
+  PlugZap,
+  Building2,
+  Key,
   Users,
   Clock,
   Activity,
@@ -57,8 +60,10 @@ export const Dashboard: React.FC = () => {
     machines: 0,
     servers: 0,
     printers: 0,
+    ups: 0,
     licenses: 0,
-    collaborators: 0
+    collaborators: 0,
+    units: 0
   });
   
   const [detailedStats, setDetailedStats] = useState({
@@ -75,7 +80,7 @@ export const Dashboard: React.FC = () => {
     if (authLoading || !profile) return;
 
     const fetchStats = () => {
-      const collections = ['machines', 'servers', 'printers', 'licenses', 'collaborators'];
+      const collections = ['machines', 'servers', 'printers', 'ups', 'licenses', 'collaborators', 'units'];
       const unsubscribes = collections.map((c, index) => {
         return onSnapshot(collection(db, c), (snapshot) => {
           
@@ -180,8 +185,28 @@ export const Dashboard: React.FC = () => {
     { name: 'Máquinas', value: stats.machines, color: 'var(--accent-primary)' },
     { name: 'Servidores', value: stats.servers, color: 'var(--brand-primary)' },
     { name: 'Impressoras', value: stats.printers, color: '#666666' },
+    { name: 'Nobreaks', value: stats.ups, color: '#FF8C00' },
     { name: 'Licenças', value: stats.licenses, color: '#999999' },
   ];
+
+  const { units, collaborators, machines, servers, printers, ups, licenses } = useData();
+
+  const assetsByUnit = useMemo(() => {
+    const groups = [collaborators, machines, servers, printers, ups, licenses];
+    const rows = units
+      .filter((u: any) => u.status !== 'deactivated')
+      .map((u: any, i: number) => ({
+        name: u.code || u.name,
+        fullName: u.name,
+        value: groups.reduce((acc, items) => acc + items.filter((it: any) => it.unit === u.name).length, 0),
+        color: COLORS[i % COLORS.length],
+      }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
+    const withoutUnit = groups.reduce((acc, items) => acc + items.filter((it: any) => !it.unit).length, 0);
+    if (withoutUnit > 0) rows.push({ name: 'Sem unidade', fullName: 'Sem unidade', value: withoutUnit, color: '#CCCCCC' });
+    return rows;
+  }, [units, collaborators, machines, servers, printers, ups, licenses]);
 
   const CustomTooltip = ({ active, payload, label }: any) => {
     if (active && payload && payload.length) {
@@ -213,12 +238,14 @@ export const Dashboard: React.FC = () => {
         </div>
       </header>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         <StatCard title="Máquinas" value={stats.machines} icon={Monitor} color="bg-[var(--accent-primary)]" delay={0.1} />
         <StatCard title="Servidores" value={stats.servers} icon={Server} color="bg-[var(--brand-primary)]" delay={0.2} />
         <StatCard title="Impressoras" value={stats.printers} icon={Printer} color="bg-[var(--text-secondary)]" delay={0.3} />
+        <StatCard title="Nobreaks" value={stats.ups} icon={PlugZap} color="bg-[#FF8C00]" delay={0.35} />
         <StatCard title="Licenças" value={stats.licenses} icon={Key} color="bg-[var(--text-secondary)] opacity-80" delay={0.4} />
         <StatCard title="Colaboradores" value={stats.collaborators} icon={Users} color="bg-[var(--text-secondary)] opacity-60" delay={0.5} />
+        <StatCard title="Unidades" value={stats.units} icon={Building2} color="bg-[var(--status-success)]" delay={0.55} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -243,6 +270,35 @@ export const Dashboard: React.FC = () => {
                 <Tooltip content={<CustomTooltip />} />
                 <Bar dataKey="value" radius={[6, 6, 0, 0]} barSize={40}>
                   {chartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </motion.div>
+
+        {/* Ativos por Unidade */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.65 }}
+          className="p-6 rounded-3xl border h-[350px] flex flex-col shadow-sm"
+          style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}
+        >
+          <h3 className="text-[10px] font-bold uppercase tracking-[0.2em] mb-6 flex items-center gap-3" style={{ color: 'var(--text-secondary)' }}>
+            <div className="w-1.5 h-1.5 rounded-full bg-[var(--status-success)]" />
+            Ativos por Unidade
+          </h3>
+          <div className="flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={assetsByUnit} layout="vertical" margin={{ top: 10, right: 30, left: 20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="var(--border-color)" />
+                <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: 'var(--text-secondary)', fontSize: 10 }} />
+                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{ fill: 'var(--text-secondary)', fontSize: 10, fontWeight: 700 }} width={90} />
+                <Tooltip content={<CustomTooltip />} />
+                <Bar dataKey="value" name="Vínculos" radius={[0, 6, 6, 0]} barSize={20}>
+                  {assetsByUnit.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Bar>

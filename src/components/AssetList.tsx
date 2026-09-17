@@ -52,7 +52,9 @@ import {
   Printer,
   Package,
   Info,
-  Lock
+  Lock,
+  Image as ImageIcon,
+  PlugZap
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { motion, AnimatePresence } from 'motion/react';
@@ -60,6 +62,7 @@ import { DoubleScrollContainer } from './DoubleScrollContainer';
 
 import { DataImporter } from './DataImporter';
 import { CommentsSection } from './CommentsSection';
+import { ImageUpload } from './ImageUpload';
 
 import { encryptData, decryptData } from '../utils/crypto';
 
@@ -260,6 +263,7 @@ export const AssetList: React.FC<AssetListProps> = ({
     if (collectionName === 'machines') defaultSort = 'hostname';
     if (collectionName === 'servers') defaultSort = 'machine_id';
     if (collectionName === 'printers') defaultSort = 'brand';
+    if (collectionName === 'ups') defaultSort = 'brand';
     if (collectionName === 'licenses') defaultSort = 'softwareName';
     
     setSortCriteria([{ field: defaultSort, order: 'asc' }]);
@@ -293,6 +297,10 @@ export const AssetList: React.FC<AssetListProps> = ({
   }, [collectionName, authLoading]);
 
   useEffect(() => {
+    const unitParam = searchParams.get('unit');
+    if (unitParam) {
+      setSelectedUnits([unitParam]);
+    }
     const id = searchParams.get('id');
     if (id && items.length > 0) {
       const item = items.find(i => i.id === id);
@@ -615,6 +623,24 @@ export const AssetList: React.FC<AssetListProps> = ({
 
     if (key === 'id') return null;
 
+    if (prop.format === 'image' || key === 'photoUrl') {
+      return (
+        <ImageUpload
+          key={fullKey}
+          value={value || ''}
+          collectionName={collectionName}
+          label={prop.description || 'Foto do equipamento'}
+          onChange={(url) => {
+            if (parentKey) {
+              setFormData({ ...formData, [parentKey]: { ...(formData[parentKey] || {}), [key]: url } });
+            } else {
+              setFormData({ ...formData, [key]: url });
+            }
+          }}
+        />
+      );
+    }
+
     if (prop.type === 'object') {
       return (
         <div key={fullKey} className="col-span-full grid grid-cols-1 md:grid-cols-2 gap-6 p-4 rounded-2xl border" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
@@ -824,6 +850,53 @@ export const AssetList: React.FC<AssetListProps> = ({
       );
     }
 
+    if (key === 'unit' && !prop.enum) {
+      const registeredUnits = getReferencedData('units')
+        .filter((u: any) => u.status !== 'deactivated')
+        .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '', 'pt-BR'));
+      const hasLegacyValue = value && !registeredUnits.some((u: any) => u.name === value);
+
+      if (registeredUnits.length > 0) {
+        return (
+          <div key={fullKey} className="space-y-2">
+            <label className="text-sm font-semibold capitalize" style={{ color: 'var(--text-primary)' }}>
+              {prop.description || key}
+              {isRequired && <span className="text-red-500 ml-1">*</span>}
+            </label>
+            <select
+              className={`w-full px-4 py-2.5 border rounded-xl focus:ring-2 transition-all outline-none ${
+                hasError
+                  ? 'border-red-300 ring-2 ring-red-100 focus:ring-red-500/20 focus:border-red-500'
+                  : 'focus:ring-accent-primary/20 focus:border-accent-primary'
+              }`}
+              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: hasError ? undefined : 'var(--border-color)', color: 'var(--text-primary)' }}
+              value={value || ''}
+              onChange={(e) => {
+                if (parentKey) {
+                  setFormData({ ...formData, [parentKey]: { ...(formData[parentKey] || {}), [key]: e.target.value } });
+                } else {
+                  setFormData({ ...formData, [key]: e.target.value });
+                }
+              }}
+              required={isRequired}
+            >
+              <option value="">Selecionar unidade</option>
+              {registeredUnits.map((u: any) => (
+                <option key={u.id} value={u.name}>
+                  {u.name}{u.city ? ` — ${u.city}${u.state ? `/${u.state}` : ''}` : ''}
+                </option>
+              ))}
+              {hasLegacyValue && <option value={value}>{value} (antiga)</option>}
+            </select>
+            {hasError && <p className="text-[10px] font-bold text-red-500 uppercase tracking-wider">Este campo é obrigatório</p>}
+            <p className="text-[10px]" style={{ color: 'var(--text-secondary)' }}>
+              Unidades gerenciadas em Gestão → Unidades.
+            </p>
+          </div>
+        );
+      }
+    }
+
     return (
       <div key={fullKey} className="space-y-2">
         <label className="text-sm font-semibold capitalize" style={{ color: 'var(--text-primary)' }}>
@@ -933,7 +1006,15 @@ export const AssetList: React.FC<AssetListProps> = ({
         return [
           { title: 'Identificação', icon: <Printer size={16} />, fields: ['brand', 'model', 'status', 'unit'] },
           { title: 'Conexão', icon: <ArrowUpDown size={16} />, fields: ['connectionType', 'ipAddress', 'location'] },
-          { title: 'Manutenção', icon: <Calendar size={16} />, fields: ['nextMaintenanceDate'] }
+          { title: 'Manutenção', icon: <Calendar size={16} />, fields: ['nextMaintenanceDate'] },
+          { title: 'Foto', icon: <ImageIcon size={16} />, fields: ['photoUrl'] }
+        ];
+      case 'ups':
+        return [
+          { title: 'Identificação', icon: <PlugZap size={16} />, fields: ['brand', 'model', 'status', 'unit'] },
+          { title: 'Características', icon: <Settings size={16} />, fields: ['powerCapacity', 'serialNumber', 'location', 'connectedDevices'] },
+          { title: 'Manutenção', icon: <Calendar size={16} />, fields: ['batteryChangeDate', 'nextMaintenanceDate'] },
+          { title: 'Foto', icon: <ImageIcon size={16} />, fields: ['photoUrl'] }
         ];
       default:
         return [{ title: 'Informações Gerais', icon: <Info size={16} />, fields: Object.keys(schema.properties) }];
@@ -1456,6 +1537,18 @@ export const AssetList: React.FC<AssetListProps> = ({
                               }
                             }
 
+                            if (col.key === 'photoUrl') {
+                              return (
+                                <td key={col.key} className="px-6 py-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                                  {val ? (
+                                    <img src={val} alt="Foto do ativo" className="w-14 h-14 rounded-xl object-cover border" style={{ borderColor: 'var(--border-color)' }} referrerPolicy="no-referrer" />
+                                  ) : (
+                                    <span className="text-xs italic opacity-60">Sem foto</span>
+                                  )}
+                                </td>
+                              );
+                            }
+
                             return (
                               <td key={col.key} className="px-6 py-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
                                 <div className="flex items-center gap-2">
@@ -1599,7 +1692,12 @@ export const AssetList: React.FC<AssetListProps> = ({
         {viewMode === 'grid' && (
           <div className="hidden md:grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 p-6" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             {paginatedItems.map((item) => (
-              <div key={item.id} className="rounded-3xl border shadow-sm transition-all p-6 space-y-4 group relative" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
+              <div key={item.id} className="rounded-3xl border shadow-sm transition-all p-6 space-y-4 group relative overflow-hidden" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
+                {item.photoUrl && (
+                  <div className="-m-6 mb-0 h-44 overflow-hidden border-b" style={{ borderColor: 'var(--border-color)' }}>
+                    <img src={item.photoUrl} alt="Foto do ativo" className="w-full h-full object-cover" referrerPolicy="no-referrer" loading="lazy" />
+                  </div>
+                )}
                 <div className="absolute top-4 left-4 z-10">
                   <input 
                     type="checkbox" 
@@ -1927,7 +2025,7 @@ export const AssetList: React.FC<AssetListProps> = ({
                   </div>
                   <div>
                     <h3 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>
-                      {selectedItem.hostname || selectedItem.name || selectedItem.softwareName || 'Detalhes do Ativo'}
+                      {selectedItem.hostname || selectedItem.name || selectedItem.softwareName || ((selectedItem.brand || selectedItem.model) ? `${selectedItem.brand || ''} ${selectedItem.model || ''}`.trim() : 'Detalhes do Ativo')}
                     </h3>
                     <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>{title.slice(0, -1)}</p>
                   </div>
@@ -1994,10 +2092,22 @@ export const AssetList: React.FC<AssetListProps> = ({
               </div>
 
               <div className="p-6">
+                {selectedItem.photoUrl && (
+                  <div className="mb-8 rounded-3xl overflow-hidden border shadow-sm" style={{ borderColor: 'var(--border-color)' }}>
+                    <img src={selectedItem.photoUrl} alt="Foto do ativo" className="w-full max-h-80 object-cover" referrerPolicy="no-referrer" />
+                    <div className="px-4 py-2 flex items-center justify-between" style={{ backgroundColor: 'var(--bg-primary)' }}>
+                      <span className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--text-secondary)' }}>Foto do equipamento</span>
+                      <a href={selectedItem.photoUrl} target="_blank" rel="noreferrer" className="text-[10px] font-bold uppercase tracking-widest" style={{ color: 'var(--brand-primary)' }}>
+                        Ampliar
+                      </a>
+                    </div>
+                  </div>
+                )}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-8">
                   {columns.map(col => {
                     const val = selectedItem[col.key];
                     if (val === null || val === undefined || val === '') return null;
+                    if (col.key === 'photoUrl') return null;
                     
                     const isSecret = col.key.toLowerCase().includes('password') || col.key === 'autodesk_credentials';
                     const prop = schema.properties[col.key];

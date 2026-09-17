@@ -18,7 +18,10 @@ service cloud.firestore {
     // Fields: machine_id, brand_model, configuration, programs, cals, storage, application, bios_date, status, etc.
     //
     // Collection: printers
-    // Fields: brand, model, ipAddress, location, nextMaintenanceDate, status, etc.
+    // Fields: brand, model, ipAddress, location, nextMaintenanceDate, status, photoUrl, etc.
+    //
+    // Collection: ups
+    // Fields: brand, model, powerCapacity, serialNumber, location, unit, status, batteryChangeDate, nextMaintenanceDate, connectedDevices, photoUrl, etc.
     //
     // Collection: licenses
     // Fields: softwareName, quantity, used, expirationDate, etc.
@@ -116,7 +119,7 @@ service cloud.firestore {
     function isValidComment(data) {
       return data.keys().hasAll(['entityId', 'entityType', 'authorId', 'authorName', 'authorEmail', 'content', 'tag', 'createdAt', 'updatedAt']) &&
              data.entityId is string &&
-             data.entityType in ['users', 'machines', 'collaborators', 'servers', 'printers', 'licenses'] &&
+              data.entityType in ['users', 'machines', 'collaborators', 'servers', 'printers', 'ups', 'licenses'] &&
              data.authorId == request.auth.uid &&
              data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
              data.tag in ['#Erro', '#Incomplete', '#SolicitaçãoMudança', '#Desligamento', '#TrocaSetor', 'none'] &&
@@ -184,7 +187,19 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
+    match /ups/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
     match /licenses/{id} {
+      allow read: if isAuthenticated();
+      allow create, update: if canEdit() && isValidAsset(request.resource.data);
+      allow delete: if isSuperAdmin();
+    }
+
+    match /units/{id} {
       allow read: if isAuthenticated();
       allow create, update: if canEdit() && isValidAsset(request.resource.data);
       allow delete: if isSuperAdmin();

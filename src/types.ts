@@ -1,4 +1,4 @@
-export type EntityType = 'collaborators' | 'machines' | 'servers' | 'printers' | 'licenses';
+export type EntityType = 'collaborators' | 'machines' | 'servers' | 'printers' | 'ups' | 'licenses' | 'units';
 
 export interface Collaborator {
   id: string;
@@ -75,6 +75,43 @@ export interface Printer {
   status: 'online' | 'offline' | 'maintenance';
   unit: string;
   nextMaintenanceDate?: string;
+  photoUrl?: string;
+}
+
+export interface Ups {
+  id: string;
+  brand: string;
+  model: string;
+  powerCapacity?: string;
+  serialNumber?: string;
+  location?: string;
+  unit?: string;
+  status: 'online' | 'offline' | 'maintenance';
+  batteryChangeDate?: string;
+  nextMaintenanceDate?: string;
+  connectedDevices?: string;
+  photoUrl?: string;
+}
+
+export interface Unit {
+  id: string;
+  name: string;
+  code?: string;
+  cnpj?: string;
+  razaoSocial?: string;
+  cnpjSituacao?: string;
+  cep?: string;
+  street?: string;
+  number?: string;
+  complement?: string;
+  neighborhood?: string;
+  city?: string;
+  state?: string;
+  phone?: string;
+  email?: string;
+  responsible?: string;
+  notes?: string;
+  status: 'active' | 'inactive' | 'deactivated';
 }
 
 export interface License {
@@ -156,7 +193,7 @@ export type CommentTag = '#Erro' | '#Incomplete' | '#SolicitaçãoMudança' | '#
 export interface Comment {
   id: string;
   entityId: string;
-  entityType: 'users' | 'machines' | 'collaborators' | 'servers' | 'printers' | 'licenses';
+  entityType: 'users' | 'machines' | 'collaborators' | 'servers' | 'printers' | 'ups' | 'licenses';
   authorId: string;
   authorName: string;
   authorEmail: string;

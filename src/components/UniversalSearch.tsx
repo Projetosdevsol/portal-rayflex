@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, X, Users, Monitor, Server, Printer, Key, ChevronRight } from 'lucide-react';
+import { Search, X, Users, Monitor, Server, Printer, PlugZap, Key, ChevronRight } from 'lucide-react';
 import { useData } from '../contexts/DataContext';
 import { motion, AnimatePresence } from 'motion/react';
 import { clsx, type ClassValue } from 'clsx';
@@ -14,7 +14,7 @@ export const UniversalSearch: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [results, setResults] = useState<{ type: string, items: any[], icon: any, label: string, path: string }[]>([]);
-  const { collaborators, machines, servers, printers, licenses } = useData();
+  const { collaborators, machines, servers, printers, ups, licenses } = useData();
   const navigate = useNavigate();
   const searchRef = useRef<HTMLDivElement>(null);
 
@@ -31,6 +31,7 @@ export const UniversalSearch: React.FC = () => {
       { type: 'machine', items: machines, icon: Monitor, label: 'Máquinas', path: '/machines' },
       { type: 'server', items: servers, icon: Server, label: 'Servidores', path: '/servers' },
       { type: 'printer', items: printers, icon: Printer, label: 'Impressoras', path: '/printers' },
+      { type: 'ups', items: ups, icon: PlugZap, label: 'Nobreaks', path: '/ups' },
       { type: 'license', items: licenses, icon: Key, label: 'Licenças', path: '/licenses' },
     ];
 
@@ -45,7 +46,7 @@ export const UniversalSearch: React.FC = () => {
     }).filter(col => col.items.length > 0);
 
     setResults(filteredResults);
-  }, [searchTerm, collaborators, machines, servers, printers, licenses]);
+  }, [searchTerm, collaborators, machines, servers, printers, ups, licenses]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -86,6 +87,7 @@ export const UniversalSearch: React.FC = () => {
       case 'machine': return item.hostname;
       case 'server': return item.brand_model || item.hostname;
       case 'printer': return `${item.brand} ${item.model}`;
+      case 'ups': return `${item.brand} ${item.model}`;
       case 'license': return item.name;
       default: return item.id;
     }
@@ -97,6 +99,7 @@ export const UniversalSearch: React.FC = () => {
       case 'machine': return item.serialNumber;
       case 'server': return item.unit;
       case 'printer': return item.ipAddress;
+      case 'ups': return item.location || item.serialNumber;
       case 'license': return item.key;
       default: return '';
     }

@@ -15,12 +15,14 @@ import { Controle } from './components/Controle';
 import { TaskList } from './components/TaskList';
 import { Settings } from './components/Settings';
 import { Reports } from './components/Reports';
+import { Units } from './components/Units';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { 
-  Users, 
-  Monitor, 
-  Server, 
-  Printer, 
+import {
+  Users,
+  Monitor,
+  Server,
+  Printer,
+  PlugZap,
   Key,
   CheckSquare
 } from 'lucide-react';
@@ -184,11 +186,36 @@ const AppContent = () => {
             icon={Printer}
             schema={blueprint.entities.printer}
             columns={[
+              { key: 'photoUrl', label: 'Foto', render: (val) => val ? <img src={val} alt="Impressora" className="w-12 h-12 rounded-xl object-cover border" style={{ borderColor: 'var(--border-color)' }} referrerPolicy="no-referrer" /> : <span className="text-xs italic opacity-60">Sem foto</span> },
               { key: 'brand', label: 'Marca' },
               { key: 'model', label: 'Modelo' },
               { key: 'connectionType', label: 'Tipo de Conexão' },
               { key: 'ipAddress', label: 'Endereço IP/Compartilhamento' },
               { key: 'location', label: 'Localização' },
+              { key: 'nextMaintenanceDate', label: 'Próxima Manutenção' },
+              { key: 'status', label: 'Status' }
+            ]}
+          />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/ups" element={
+        <ProtectedRoute>
+          <AssetList
+            collectionName="ups"
+            title="Nobreaks"
+            icon={PlugZap}
+            schema={blueprint.entities.ups}
+            columns={[
+              { key: 'photoUrl', label: 'Foto', render: (val) => val ? <img src={val} alt="Nobreak" className="w-12 h-12 rounded-xl object-cover border" style={{ borderColor: 'var(--border-color)' }} referrerPolicy="no-referrer" /> : <span className="text-xs italic opacity-60">Sem foto</span> },
+              { key: 'brand', label: 'Marca' },
+              { key: 'model', label: 'Modelo' },
+              { key: 'powerCapacity', label: 'Potência (VA/W)' },
+              { key: 'serialNumber', label: 'Número de Série' },
+              { key: 'location', label: 'Localização' },
+              { key: 'unit', label: 'Unidade' },
+              { key: 'connectedDevices', label: 'Equipamentos Conectados' },
+              { key: 'batteryChangeDate', label: 'Última Troca de Bateria' },
               { key: 'nextMaintenanceDate', label: 'Próxima Manutenção' },
               { key: 'status', label: 'Status' }
             ]}
@@ -241,6 +268,12 @@ const AppContent = () => {
       <Route path="/reports" element={
         <ProtectedRoute>
           <Reports />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/units" element={
+        <ProtectedRoute>
+          <Units />
         </ProtectedRoute>
       } />
 

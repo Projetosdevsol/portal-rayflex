@@ -1155,8 +1155,10 @@ export const UserManagement: React.FC = () => {
                       { id: 'machines', label: 'Computadores' },
                       { id: 'collaborators', label: 'Colaboradores' },
                       { id: 'printers', label: 'Impressoras' },
+                      { id: 'ups', label: 'Nobreaks' },
                       { id: 'servers', label: 'Servidores' },
-                      { id: 'licenses', label: 'Licenças' }
+                      { id: 'licenses', label: 'Licenças' },
+                      { id: 'units', label: 'Unidades' }
                     ].map(item => (
                       <label key={item.id} className="flex items-center gap-3 p-3 rounded-xl border hover:bg-[var(--bg-secondary)] cursor-pointer transition-colors" style={{ borderColor: 'var(--border-color)' }}>
                         <input
