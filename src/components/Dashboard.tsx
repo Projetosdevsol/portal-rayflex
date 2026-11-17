@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { getStatusLabel } from '../utils/status';
 import { 
   BarChart, 
   Bar, 
@@ -89,20 +90,12 @@ export const Dashboard: React.FC = () => {
             const osCounts: Record<string, number> = {};
             const statusCounts: Record<string, number> = {};
             
-            const statusMap: Record<string, string> = {
-              'available': 'Disponível',
-              'in-use': 'Em Uso',
-              'maintenance': 'Manutenção',
-              'retired': 'Aposentado',
-              'deactivated': 'Desativado'
-            };
-
             snapshot.docs.forEach(doc => {
               const data = doc.data();
               const os = data.os || 'Outro';
               osCounts[os] = (osCounts[os] || 0) + 1;
               
-              const status = statusMap[data.status] || data.status || 'Desconhecido';
+              const status = data.status ? getStatusLabel(data.status) : 'Desconhecido';
               statusCounts[status] = (statusCounts[status] || 0) + 1;
             });
 

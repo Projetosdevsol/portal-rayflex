@@ -65,6 +65,13 @@ import { CommentsSection } from './CommentsSection';
 import { ImageUpload } from './ImageUpload';
 
 import { encryptData, decryptData } from '../utils/crypto';
+import {
+  getStatusColor,
+  getStatusLabel,
+  getStatusTone,
+  normalizeStatusValue,
+} from '../utils/status';
+import { getErrorMessage } from '../utils/api';
 
 const SecretValue: React.FC<{ value: string }> = ({ value }) => {
   const [isVisible, setIsVisible] = useState(false);
@@ -140,59 +147,21 @@ const PasswordInput: React.FC<{
   );
 };
 
-const getStatusLabel = (status: string) => {
-  const labels: Record<string, string> = {
-    'available': 'Ativado',
-    'in-use': 'em uso',
-    'maintenance': 'manutenção',
-    'retired': 'baixado',
-    'active': 'Ativado',
-    'inactive': 'Desativado',
-    'online': 'Ativado',
-    'offline': 'Desativado',
-    'pending': 'pendente',
-    'in-progress': 'em andamento',
-    'completed': 'concluído',
-    'cancelled': 'cancelado',
-    'deactivated': 'Desativado'
-  };
-  return labels[status] || status;
-};
-
 const getStatusIcon = (status: string) => {
-  switch (status) {
-    case 'active':
-    case 'available':
-    case 'online':
-    case 'completed':
+  switch (getStatusTone(status)) {
+    case 'success':
       return <Check size={10} />;
-    case 'inactive':
-    case 'offline':
-    case 'cancelled':
-    case 'deactivated':
+    case 'error':
       return <X size={10} />;
     default:
       return <AlertCircle size={10} />;
   }
 };
 
-const getStatusColor = (status: string) => {
-  const colors: Record<string, string> = {
-    'available': 'var(--status-success)',
-    'active': 'var(--status-success)',
-    'online': 'var(--status-success)',
-    'completed': 'var(--status-success)',
-    'in-use': 'var(--brand-primary)',
-    'in-progress': 'var(--brand-primary)',
-    'maintenance': 'var(--status-warning)',
-    'pending': 'var(--status-warning)',
-    'retired': 'var(--status-error)',
-    'inactive': 'var(--status-error)',
-    'offline': 'var(--status-error)',
-    'cancelled': 'var(--status-error)',
-    'deactivated': 'var(--status-error)'
-  };
-  return colors[status] || 'var(--text-secondary)';
+/** Removes duplicates while keeping the original order (N:N relations). */
+const uniqueList = (values: unknown): string[] => {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.filter(Boolean).map(String)));
 };
 
 interface AssetListProps {
@@ -238,7 +207,7 @@ export const AssetList: React.FC<AssetListProps> = ({
   const [formData, setFormData] = useState<any>({});
   const [justification, setJustification] = useState('');
   const [showJustification, setShowJustification] = useState(false);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
   const [itemToDelete, setItemToDelete] = useState<any>(null);
   const [showDeactivated, setShowDeactivated] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<string[]>(columns.map(c => c.key));
@@ -250,7 +219,7 @@ export const AssetList: React.FC<AssetListProps> = ({
   const [arraySearchTerms, setArraySearchTerms] = useState<Record<string, string>>({});
   const [activeTab, setActiveTab] = useState(0);
 
-  const showToast = (message: string, type: 'success' | 'error') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
@@ -353,6 +322,18 @@ export const AssetList: React.FC<AssetListProps> = ({
     try {
       let dataToSave = { ...formData };
 
+      // N:N relations never store duplicates, no matter how the value arrived
+      // (form, spreadsheets, bulk actions or legacy records).
+      Object.keys(schema.properties || {}).forEach((fieldKey) => {
+        const prop = schema.properties[fieldKey];
+        if (prop?.type === 'array' && prop.items?.$ref) {
+          dataToSave[fieldKey] = uniqueList(dataToSave[fieldKey]);
+        }
+        if (fieldKey === 'status' && typeof dataToSave[fieldKey] === 'string') {
+          dataToSave[fieldKey] = normalizeStatusValue(dataToSave[fieldKey]);
+        }
+      });
+
       if (collectionName === 'collaborators') {
         ['login_password', 'email_password', 'autodesk_credentials'].forEach(field => {
           if (dataToSave[field] && dataToSave[field] !== editingItem?.[field]) {
@@ -398,7 +379,7 @@ export const AssetList: React.FC<AssetListProps> = ({
       setShowErrors(false);
     } catch (error) {
       console.error('Error saving asset:', error);
-      showToast(`Erro ao salvar ${title.slice(0, -1).toLowerCase()}.`, 'error');
+      showToast(getErrorMessage(error, `Erro ao salvar ${title.slice(0, -1).toLowerCase()}.`), 'error');
     }
   };
 
@@ -452,7 +433,7 @@ export const AssetList: React.FC<AssetListProps> = ({
       setSelectedIds([]);
     } catch (error) {
       console.error('Error deleting assets:', error);
-      showToast(`Erro ao excluir itens.`, 'error');
+      showToast(getErrorMessage(error, 'Erro ao excluir itens.'), 'error');
     }
   };
 
@@ -460,17 +441,18 @@ export const AssetList: React.FC<AssetListProps> = ({
     if (!canEdit || selectedIds.length === 0) return;
     
     try {
+      const normalizedStatus = normalizeStatusValue(newStatus);
       for (const id of selectedIds) {
         const item = items.find(i => i.id === id);
         if (!item) continue;
-        await updateDoc(doc(db, collectionName, id), { status: newStatus });
-        await logAction('update', collectionName, id, item, { ...item, status: newStatus }, `Updated status of ${title}`, '', 'medium');
+        await updateDoc(doc(db, collectionName, id), { status: normalizedStatus });
+        await logAction('update', collectionName, id, item, { ...item, status: normalizedStatus }, `Updated status of ${title}`, '', 'medium');
       }
       showToast(`${selectedIds.length} itens atualizados com sucesso!`, 'success');
       setSelectedIds([]);
     } catch (error) {
       console.error('Error updating assets:', error);
-      showToast(`Erro ao atualizar itens.`, 'error');
+      showToast(getErrorMessage(error, 'Erro ao atualizar itens.'), 'error');
     }
   };
 
@@ -492,7 +474,7 @@ export const AssetList: React.FC<AssetListProps> = ({
       setSelectedIds([]);
     } catch (error) {
       console.error('Error updating assets:', error);
-      showToast(`Erro ao associar máquinas.`, 'error');
+      showToast(getErrorMessage(error, 'Erro ao associar máquinas.'), 'error');
     }
   };
 
@@ -517,6 +499,37 @@ export const AssetList: React.FC<AssetListProps> = ({
     alert(`${count} registros importados com sucesso!`);
   };
 
+  /**
+   * Resolves a reference (`$ref`) or an array of references (`items.$ref`) to
+   * the labels shown in the UI. Authorized people (N:N) use this too, so the
+   * table, grid and detail drawer never render raw collaborator IDs.
+   */
+  const getReferenceLabel = (refName: string, id: string): string => {
+    const refItem = getReferencedData(refName).find((i: any) => i.id === id);
+    if (!refItem) return id;
+    if (refName === 'collaborator') {
+      return `${refItem.name || ''}${refItem.login ? ` (${refItem.login})` : ''}`;
+    }
+    if (refName === 'machine') return refItem.hostname || id;
+    return refItem.name || refItem.title || id;
+  };
+
+  const getDisplayValue = (prop: any, val: any): string => {
+    if (val === null || val === undefined || val === '') return '';
+    if (prop?.$ref) return getReferenceLabel(prop.$ref, String(val));
+    if (prop?.type === 'array' && prop.items?.$ref) {
+      return uniqueList(val)
+        .map((id) => getReferenceLabel(prop.items.$ref, id))
+        .join(', ');
+    }
+    return String(val);
+  };
+
+  const getArrayReferenceItems = (prop: any, val: any): string[] => {
+    if (prop?.type !== 'array' || !prop.items?.$ref) return [];
+    return uniqueList(val).map((id) => getReferenceLabel(prop.items.$ref, id));
+  };
+
   const filteredItems = items
     .filter(item => {
       const searchStr = searchTerm.toLowerCase();
@@ -525,28 +538,10 @@ export const AssetList: React.FC<AssetListProps> = ({
         const val = item[col.key];
         if (val === undefined || val === null) return false;
 
-        let displayVal = String(val);
         const prop = schema.properties[col.key];
-        
-        if (prop?.$ref) {
-          const refItems = getReferencedData(prop.$ref);
-          const refItem = refItems.find(i => i.id === val);
-          if (refItem) {
-            if (prop.$ref === 'collaborator') displayVal = `${refItem.name || ''} (${refItem.login || ''})`;
-            else if (prop.$ref === 'machine') displayVal = refItem.hostname || '';
-            else displayVal = refItem.name || refItem.title || String(val);
-          }
-        } else if (prop?.type === 'array' && prop.items?.$ref) {
-          const refItems = getReferencedData(prop.items.$ref);
-          const ids = Array.isArray(val) ? val : [];
-          displayVal = ids.map(id => {
-            const refItem = refItems.find(i => i.id === id);
-            if (!refItem) return id;
-            if (prop.items.$ref === 'collaborator') return `${refItem.name || ''} (${refItem.login || ''})`;
-            if (prop.items.$ref === 'machine') return refItem.hostname || '';
-            return refItem.name || refItem.title || id;
-          }).join(', ');
-        } else if (col.key === 'status') {
+        let displayVal = getDisplayValue(prop, val);
+
+        if (col.key === 'status') {
           displayVal = getStatusLabel(val);
         }
         
@@ -1004,14 +999,15 @@ export const AssetList: React.FC<AssetListProps> = ({
         ];
       case 'printers':
         return [
-          { title: 'Identificação', icon: <Printer size={16} />, fields: ['brand', 'model', 'status', 'unit'] },
-          { title: 'Conexão', icon: <ArrowUpDown size={16} />, fields: ['connectionType', 'ipAddress', 'location'] },
+          { title: 'Identificação', icon: <Printer size={16} />, fields: ['name', 'brand', 'model', 'status', 'unit'] },
+          { title: 'Conexão', icon: <ArrowUpDown size={16} />, fields: ['connectionType', 'location', 'ipAddress', 'mac_address'] },
+          { title: 'Pessoas Autorizadas', icon: <User size={16} />, fields: ['authorized_people'] },
           { title: 'Manutenção', icon: <Calendar size={16} />, fields: ['nextMaintenanceDate'] },
           { title: 'Foto', icon: <ImageIcon size={16} />, fields: ['photoUrl'] }
         ];
       case 'ups':
         return [
-          { title: 'Identificação', icon: <PlugZap size={16} />, fields: ['brand', 'model', 'status', 'unit'] },
+          { title: 'Identificação', icon: <PlugZap size={16} />, fields: ['name', 'brand', 'model', 'status', 'unit'] },
           { title: 'Características', icon: <Settings size={16} />, fields: ['powerCapacity', 'serialNumber', 'location', 'connectedDevices'] },
           { title: 'Manutenção', icon: <Calendar size={16} />, fields: ['batteryChangeDate', 'nextMaintenanceDate'] },
           { title: 'Foto', icon: <ImageIcon size={16} />, fields: ['photoUrl'] }
@@ -1525,17 +1521,7 @@ export const AssetList: React.FC<AssetListProps> = ({
                             const prop = schema.properties[col.key];
                             const val = item[col.key];
                             const isSecret = col.key.toLowerCase().includes('password') || col.key === 'autodesk_credentials';
-                            
-                            let displayVal = val;
-                            if (prop?.$ref && val) {
-                              const refItems = getReferencedData(prop.$ref);
-                              const refItem = refItems.find(i => i.id === val);
-                              if (refItem) {
-                                if (prop.$ref === 'collaborator') displayVal = `${refItem.name} (${refItem.login})`;
-                                else if (prop.$ref === 'machine') displayVal = refItem.hostname;
-                                else displayVal = refItem.name || refItem.title || val;
-                              }
-                            }
+                            const displayVal = getDisplayValue(prop, val);
 
                             if (col.key === 'photoUrl') {
                               return (
@@ -1792,17 +1778,7 @@ export const AssetList: React.FC<AssetListProps> = ({
                     const val = item[col.key];
                     if (val === null || val === undefined || val === '') return null;
                     const isSecret = col.key.toLowerCase().includes('password') || col.key === 'autodesk_credentials';
-                    
-                    let displayVal = val;
-                    if (prop?.$ref && val) {
-                      const refItems = getReferencedData(prop.$ref);
-                      const refItem = refItems.find(i => i.id === val);
-                      if (refItem) {
-                        if (prop.$ref === 'collaborator') displayVal = `${refItem.name} (${refItem.login})`;
-                        else if (prop.$ref === 'machine') displayVal = refItem.hostname;
-                        else displayVal = refItem.name || refItem.title || val;
-                      }
-                    }
+                    const displayVal = getDisplayValue(prop, val);
 
                     return (
                       <div key={col.key} className="flex justify-between items-center py-2 border-b last:border-0" style={{ borderColor: 'var(--bg-secondary)' }}>
@@ -2111,25 +2087,28 @@ export const AssetList: React.FC<AssetListProps> = ({
                     
                     const isSecret = col.key.toLowerCase().includes('password') || col.key === 'autodesk_credentials';
                     const prop = schema.properties[col.key];
-                    
-                    let displayVal = val;
-                    if (prop?.$ref && val) {
-                      const refItems = getReferencedData(prop.$ref);
-                      const refItem = refItems.find(i => i.id === val);
-                      if (refItem) {
-                        if (prop.$ref === 'collaborator') displayVal = `${refItem.name} (${refItem.login})`;
-                        else if (prop.$ref === 'machine') displayVal = refItem.hostname;
-                        else displayVal = refItem.name || refItem.title || val;
-                      }
-                    }
+                    const displayVal = getDisplayValue(prop, val);
+                    const arrayLabels = getArrayReferenceItems(prop, val);
 
                     return (
                       <div key={col.key} className="p-4 rounded-2xl border shadow-sm" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
                         <span className="text-xs font-bold uppercase tracking-wider block mb-1" style={{ color: 'var(--text-secondary)' }}>{col.label}</span>
-                        <div className="font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-                          {col.render ? col.render(val, selectedItem) : (
-                            isSecret ? <SecretValue value={val} /> : (displayVal || '-')
-                          )}
+                        <div className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                          {col.render ? col.render(val, selectedItem) : isSecret ? (
+                            <SecretValue value={val} />
+                          ) : arrayLabels.length > 0 ? (
+                            <div className="flex flex-wrap gap-1.5">
+                              {arrayLabels.map(label => (
+                                <span
+                                  key={label}
+                                  className="px-2.5 py-1 rounded-full text-xs border"
+                                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                                >
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : (displayVal || '-')}
                         </div>
                       </div>
                     );
@@ -2393,8 +2372,8 @@ export const AssetList: React.FC<AssetListProps> = ({
             exit={{ opacity: 0, y: 50 }}
             className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border"
             style={{ 
-              backgroundColor: toast.type === 'success' ? 'rgb(5, 150, 105)' : 'rgb(220, 38, 38)',
-              borderColor: toast.type === 'success' ? 'rgb(4, 120, 87)' : 'rgb(185, 28, 28)',
+              backgroundColor: toast.type === 'success' ? 'rgb(5, 150, 105)' : toast.type === 'warning' ? 'rgb(217, 119, 6)' : 'rgb(220, 38, 38)',
+              borderColor: toast.type === 'success' ? 'rgb(4, 120, 87)' : toast.type === 'warning' ? 'rgb(180, 83, 9)' : 'rgb(185, 28, 28)',
               color: 'white'
             }}
           >

@@ -68,7 +68,16 @@ export const isValidCnpjChecksum = (value: string = ''): boolean => {
 };
 
 async function fetchJson(url: string) {
-  const res = await fetch(url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
     try {
@@ -77,8 +86,11 @@ async function fetchJson(url: string) {
     } catch {
       /* mantém mensagem padrão */
     }
-    throw new Error(message);
+    const error = new Error(message) as Error & { status?: number };
+    error.status = res.status;
+    throw error;
   }
+
   return res.json();
 }
 
@@ -124,6 +136,11 @@ export const checkCnpj = async (cnpj: string): Promise<CnpjCheck> => {
 
   try {
     const data = await fetchJson(`https://brasilapi.com.br/api/cnpj/v1/${clean}`);
+    const logradouro = [data.descricao_tipo_de_logradouro, data.logradouro]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+
     return {
       status: 'valid',
       message: `${data.razao_social || 'Empresa encontrada'} • Situação: ${data.descricao_situacao_cadastral || '—'}`,
@@ -132,9 +149,7 @@ export const checkCnpj = async (cnpj: string): Promise<CnpjCheck> => {
         razaoSocial: data.razao_social || '',
         nomeFantasia: data.nome_fantasia || '',
         situacaoCadastral: data.descricao_situacao_cadastral || '',
-        logradouro: data.logradouro || data.descricao_tipo_de_logradouro
-          ? `${data.descricao_tipo_de_logradouro || ''} ${data.logradouro || ''}`.trim()
-          : '',
+        logradouro,
         numero: data.numero || '',
         complemento: data.complemento || '',
         bairro: data.bairro || '',
@@ -144,10 +159,40 @@ export const checkCnpj = async (cnpj: string): Promise<CnpjCheck> => {
       },
     };
   } catch (error) {
-    if (error instanceof TypeError) {
-      // Falha de rede (fetch) — API possivelmente fora do ar
-      return { status: 'offline', message: 'Não foi possível consultar a Brasil API. Dígitos válidos; confirme o número manualmente.' };
+    const status = (error as { status?: number })?.status;
+    const isAbort =
+      error instanceof Error && error.name === 'AbortError';
+
+    // Network/timeout/5xx/429: the external API failed, not the CNPJ.
+    // The unit must still be saved with a yellow warning.
+    if (
+      error instanceof TypeError ||
+      isAbort ||
+      status === 408 ||
+      status === 429 ||
+      (typeof status === 'number' && status >= 500)
+    ) {
+      return {
+        status: 'offline',
+        message:
+          'Brasil API indisponível no momento. Os dígitos do CNPJ são válidos; a unidade pode ser salva e o CNPJ confirmado depois.',
+      };
     }
-    return { status: 'invalid', message: `CNPJ não encontrado na base (${error instanceof Error ? error.message : 'verifique o número'}).` };
+
+    // A definitive 404/400 means the number was not found in the Receita.
+    if (status === 404 || status === 400) {
+      return {
+        status: 'invalid',
+        message: `CNPJ não encontrado na base da Receita (${error instanceof Error ? error.message : 'verifique o número'}).`,
+      };
+    }
+
+    // Any other unexpected failure is treated as offline so it never blocks
+    // saving a unit because of an external dependency.
+    return {
+      status: 'offline',
+      message:
+        'Não foi possível confirmar o CNPJ na Brasil API. Dígitos válidos; a unidade pode ser salva com este aviso.',
+    };
   }
 };

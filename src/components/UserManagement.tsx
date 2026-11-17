@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, updateDoc, query, orderBy, deleteDoc } from 'firebase/firestore';
+import { EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { db, handleFirestoreError, OperationType, auth, formatDate } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { logAction } from '../utils/audit';
 import { getInitials } from '../utils/format';
 import { AVAILABLE_PERMISSIONS } from '../constants';
+import { apiFetch, ApiError } from '../utils/api';
 import { 
   Users, 
   Shield, 
@@ -39,6 +41,57 @@ const roleHierarchy: Record<string, number> = {
   'viewer': 20
 };
 
+/**
+ * Approved destructive cleanup scope. Units, users, audit logs,
+ * notifications, comments and tasks are intentionally preserved.
+ */
+const CLEARABLE_COLLECTIONS = [
+  { id: 'machines', label: 'Computadores' },
+  { id: 'collaborators', label: 'Colaboradores' },
+  { id: 'printers', label: 'Impressoras' },
+  { id: 'ups', label: 'Nobreaks' },
+  { id: 'servers', label: 'Servidores' },
+  { id: 'licenses', label: 'Licenças' }
+] as const;
+
+const COLLECTION_LABELS: Record<string, string> = Object.fromEntries(
+  CLEARABLE_COLLECTIONS.map((item) => [item.id, item.label])
+);
+
+/**
+ * Module-level so it can be used by `filteredUsers` during render without
+ * hitting the temporal dead zone (the previous component-level const was
+ * declared after the filter that calls it, which crashed when searching).
+ */
+const getRoleLabel = (role: UserRole) => {
+  switch (role) {
+    case 'super_admin': return 'Super Admin';
+    case 'admin': return 'Admin';
+    case 'manager': return 'Gestor';
+    case 'editor': return 'Editor';
+    case 'viewer': return 'Visualizador';
+    default: return role;
+  }
+};
+
+interface ClearJobStatus {
+  jobId: string;
+  status: 'running' | 'completed' | 'failed';
+  collections: string[];
+  results: Record<string, number>;
+  totals: Record<string, number>;
+  totalDeleted: number;
+  totalTarget: number;
+  progress: number;
+  currentCollection: string | null;
+  startedAt: number | null;
+  finishedAt: number | null;
+  error: string | null;
+  resumed?: boolean;
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export const UserManagement: React.FC = () => {
   const { isSuperAdmin, profile, loading: authLoading } = useAuth();
   const isAdminOrSuperAdmin = isSuperAdmin || profile?.role === 'admin';
@@ -60,6 +113,8 @@ export const UserManagement: React.FC = () => {
   const [clearDataPassword, setClearDataPassword] = useState('');
   const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
   const [isClearing, setIsClearing] = useState(false);
+  const [clearJob, setClearJob] = useState<ClearJobStatus | null>(null);
+  const [clearError, setClearError] = useState('');
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [formData, setFormData] = useState({
@@ -102,16 +157,11 @@ export const UserManagement: React.FC = () => {
     setLoading(true);
     try {
       const token = await auth.currentUser?.getIdToken();
-      const response = await fetch('/api/users', {
+      const data = await apiFetch<UserProfile[]>('/api/users', {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Erro ao buscar usuários');
-      }
-      const data = await response.json();
       setUsers(data);
     } catch (error: any) {
       console.error('Error fetching users:', error);
@@ -143,7 +193,7 @@ export const UserManagement: React.FC = () => {
 
     try {
       const token = await auth.currentUser?.getIdToken();
-      const response = await fetch(`/api/users/${userId}`, {
+      await apiFetch(`/api/users/${userId}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -152,15 +202,10 @@ export const UserManagement: React.FC = () => {
         body: JSON.stringify({ role: newRole })
       });
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Erro ao atualizar nível de acesso');
-      }
-
       await fetchUsers();
     } catch (error: any) {
       console.error('Error updating user role:', error);
-      showToast(error.message, 'error');
+      showToast(error.message || 'Erro ao atualizar nível de acesso.', 'error');
     }
   };
 
@@ -170,22 +215,17 @@ export const UserManagement: React.FC = () => {
 
     try {
       const token = await auth.currentUser?.getIdToken();
-      const response = await fetch(`/api/users/${userId}`, {
+      await apiFetch(`/api/users/${userId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
 
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Erro ao excluir usuário');
-      }
-
       await fetchUsers();
     } catch (error: any) {
       console.error('Error deleting user:', error);
-      showToast(error.message, 'error');
+      showToast(error.message || 'Erro ao excluir usuário.', 'error');
     }
   };
 
@@ -238,7 +278,7 @@ export const UserManagement: React.FC = () => {
         delete (payload as any).password;
       }
 
-      const response = await fetch(url, {
+      await apiFetch(url, {
         method,
         headers: {
           'Content-Type': 'application/json',
@@ -246,12 +286,6 @@ export const UserManagement: React.FC = () => {
         },
         body: JSON.stringify(payload)
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || `Erro ao ${editingUser ? 'editar' : 'criar'} usuário`);
-      }
 
       await fetchUsers();
       setIsModalOpen(false);
@@ -265,40 +299,173 @@ export const UserManagement: React.FC = () => {
     }
   };
 
+  const getAuthToken = async (forceRefresh = false) => {
+    const token = await auth.currentUser?.getIdToken(forceRefresh);
+    if (!token) {
+      throw new Error('Sessão expirada. Faça login novamente.');
+    }
+    return token;
+  };
+
+  const continueClearJob = async (
+    jobId: string,
+    currentJob?: ClearJobStatus
+  ) => {
+    let job = currentJob;
+
+    if (!job) {
+      const token = await getAuthToken();
+      job = await apiFetch<ClearJobStatus>(
+        `/api/admin/clear-data/${encodeURIComponent(jobId)}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      setClearJob(job);
+    }
+
+    while (job.status === 'running') {
+      await wait(1200);
+      const token = await getAuthToken();
+      job = await apiFetch<ClearJobStatus>(
+        `/api/admin/clear-data/${encodeURIComponent(jobId)}/continue`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      setClearJob(job);
+    }
+
+    return job;
+  };
+
+  const finishClearJob = (job: ClearJobStatus) => {
+    if (job.status !== 'completed') {
+      throw new Error(job.error || 'A limpeza de dados não foi concluída.');
+    }
+    showToast(
+      `Limpeza concluída: ${job.totalDeleted} registro(s) removido(s).`,
+      'success'
+    );
+  };
+
   const handleClearData = async () => {
+    if (!isSuperAdmin) {
+      showToast('Apenas Super Admins podem limpar dados.', 'error');
+      return;
+    }
+
     if (!clearDataPassword || selectedCollections.length === 0) return;
-    
+
     setIsClearing(true);
+    setClearError('');
+    setClearJob(null);
+
     try {
-      const idToken = await auth.currentUser?.getIdToken();
-      const response = await fetch('/api/admin/clear-data', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${idToken}`
-        },
-        body: JSON.stringify({
-          password: clearDataPassword,
-          collections: selectedCollections
-        })
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.error || 'Erro ao limpar dados');
+      const currentUser = auth.currentUser;
+      if (!currentUser?.email) {
+        throw new Error('Sessão inválida. Faça login novamente.');
       }
 
-      setIsClearDataModalOpen(false);
+      if (
+        !currentUser.providerData.some(
+          (provider) => provider.providerId === 'password'
+        )
+      ) {
+        throw new Error(
+          'Sua conta não usa autenticação por senha. Entre com e-mail e senha para confirmar esta ação.'
+        );
+      }
+
+      // Reauthenticate with the password. The backend verifies the fresh
+      // `auth_time` claim, so the password is never sent to our API.
+      try {
+        await reauthenticateWithCredential(
+          currentUser,
+          EmailAuthProvider.credential(currentUser.email, clearDataPassword)
+        );
+      } catch (reauthError: any) {
+        const code = reauthError?.code || '';
+        if (
+          code === 'auth/wrong-password' ||
+          code === 'auth/invalid-credential'
+        ) {
+          throw new Error('Senha incorreta. Tente novamente.');
+        }
+        if (code === 'auth/too-many-requests') {
+          throw new Error(
+            'Muitas tentativas de confirmação. Aguarde alguns minutos.'
+          );
+        }
+        throw new Error(
+          'Não foi possível confirmar sua senha. Faça login novamente.'
+        );
+      }
+
+      const token = await currentUser.getIdToken(true);
+      const started = await apiFetch<ClearJobStatus>(
+        '/api/admin/clear-data',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ collections: selectedCollections })
+        }
+      );
+
       setClearDataPassword('');
-      setSelectedCollections([]);
-      showToast('Dados limpos com sucesso!', 'success');
+      setClearJob(started);
+
+      if (started.resumed) {
+        showToast('Retomando a limpeza que já estava em andamento.', 'success');
+      }
+
+      const finished = await continueClearJob(started.jobId, started);
+      finishClearJob(finished);
     } catch (error: any) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : error?.message || 'Erro ao limpar dados.';
       console.error('Error clearing data:', error);
-      showToast(error.message, 'error');
+      setClearError(message);
+      showToast(message, 'error');
     } finally {
       setIsClearing(false);
     }
+  };
+
+  const handleResumeClear = async () => {
+    if (!clearJob?.jobId || isClearing) return;
+
+    setIsClearing(true);
+    setClearError('');
+
+    try {
+      const finished = await continueClearJob(clearJob.jobId);
+      finishClearJob(finished);
+    } catch (error: any) {
+      const message =
+        error instanceof ApiError
+          ? error.message
+          : error?.message || 'Erro ao continuar a limpeza.';
+      console.error('Error resuming data cleanup:', error);
+      setClearError(message);
+      showToast(message, 'error');
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  const handleCloseClearModal = () => {
+    if (isClearing || clearJob?.status === 'running') return;
+
+    setIsClearDataModalOpen(false);
+    setClearDataPassword('');
+    setSelectedCollections([]);
+    setClearJob(null);
+    setClearError('');
   };
 
   const filteredUsers = users
@@ -339,17 +506,6 @@ export const UserManagement: React.FC = () => {
       case 'editor': return <Edit style={{ color: 'var(--accent-primary)' }} size={18} />;
       case 'viewer': return <Eye style={{ color: 'var(--text-secondary)' }} size={18} />;
       default: return <UserIcon style={{ color: 'var(--text-secondary)' }} size={18} />;
-    }
-  };
-
-  const getRoleLabel = (role: UserRole) => {
-    switch (role) {
-      case 'super_admin': return 'Super Admin';
-      case 'admin': return 'Admin';
-      case 'manager': return 'Gestor';
-      case 'editor': return 'Editor';
-      case 'viewer': return 'Visualizador';
-      default: return role;
     }
   };
 
@@ -795,15 +951,21 @@ export const UserManagement: React.FC = () => {
               <div>
                 <p className="text-sm font-medium" style={{ color: 'var(--status-cancelled-text)' }}>Aviso de Risco Crítico</p>
                 <p className="text-xs opacity-80 mt-1" style={{ color: 'var(--status-cancelled-text)' }}>
-                  Ao prosseguir, todos os registros das coleções selecionadas serão excluídos permanentemente. 
-                  Esta ação não pode ser desfeita e afetará todos os usuários do sistema.
+                  Ao prosseguir, todos os registros das coleções de ativos selecionadas serão excluídos permanentemente.
+                  Unidades, usuários, auditoria, notificações, comentários e tarefas são preservados.
+                  Esta ação não pode ser desfeita.
                 </p>
               </div>
             </div>
           </div>
 
           <button
-            onClick={() => setIsClearDataModalOpen(true)}
+            onClick={() => {
+              setClearJob(null);
+              setClearError('');
+              setClearDataPassword('');
+              setIsClearDataModalOpen(true);
+            }}
             className="px-6 py-2.5 rounded-xl font-medium transition-colors shadow-sm"
             style={{ backgroundColor: 'var(--status-cancelled-text)', color: 'var(--bg-primary)' }}
           >
@@ -1131,14 +1293,18 @@ export const UserManagement: React.FC = () => {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="rounded-2xl shadow-xl w-full max-w-md overflow-hidden"
+              className="rounded-2xl shadow-xl w-full max-w-md max-h-[90vh] flex flex-col overflow-hidden"
               style={{ backgroundColor: 'var(--bg-primary)' }}
             >
-              <div className="p-6 border-b flex justify-between items-center" style={{ backgroundColor: 'var(--status-cancelled-bg)', borderColor: 'var(--border-color)' }}>
-                <h3 className="text-xl font-bold" style={{ color: 'var(--status-cancelled-text)' }}>Confirmar Limpeza</h3>
-                <button 
-                  onClick={() => setIsClearDataModalOpen(false)} 
-                  className="p-2 rounded-full transition-colors"
+              <div className="p-6 border-b flex justify-between items-center shrink-0" style={{ backgroundColor: 'var(--status-cancelled-bg)', borderColor: 'var(--border-color)' }}>
+                <div>
+                  <h3 className="text-xl font-bold" style={{ color: 'var(--status-cancelled-text)' }}>Confirmar Limpeza</h3>
+                  <p className="text-[11px] mt-1 opacity-80" style={{ color: 'var(--status-cancelled-text)' }}>Operação irreversível e registrada na auditoria</p>
+                </div>
+                <button
+                  onClick={handleCloseClearModal}
+                  disabled={isClearing || clearJob?.status === 'running'}
+                  className="p-2 rounded-full transition-colors disabled:opacity-40"
                   style={{ backgroundColor: 'transparent' }}
                   onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'var(--status-cancelled-bg)'}
                   onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
@@ -1146,38 +1312,48 @@ export const UserManagement: React.FC = () => {
                   <X className="w-6 h-6" style={{ color: 'var(--status-cancelled-text)', opacity: 0.6 }} />
                 </button>
               </div>
-              
-              <div className="p-6 space-y-6">
+
+              <div className="p-6 space-y-6 overflow-y-auto">
                 <div className="space-y-3">
                   <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Selecione o que deseja excluir:</p>
                   <div className="grid grid-cols-1 gap-2">
-                    {[
-                      { id: 'machines', label: 'Computadores' },
-                      { id: 'collaborators', label: 'Colaboradores' },
-                      { id: 'printers', label: 'Impressoras' },
-                      { id: 'ups', label: 'Nobreaks' },
-                      { id: 'servers', label: 'Servidores' },
-                      { id: 'licenses', label: 'Licenças' },
-                      { id: 'units', label: 'Unidades' }
-                    ].map(item => (
-                      <label key={item.id} className="flex items-center gap-3 p-3 rounded-xl border hover:bg-[var(--bg-secondary)] cursor-pointer transition-colors" style={{ borderColor: 'var(--border-color)' }}>
-                        <input
-                          type="checkbox"
-                          checked={selectedCollections.includes(item.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedCollections([...selectedCollections, item.id]);
-                            } else {
-                              setSelectedCollections(selectedCollections.filter(id => id !== item.id));
-                            }
-                          }}
-                          className="w-4 h-4 rounded focus:ring-red-500"
-                          style={{ color: 'var(--status-error)' }}
-                        />
-                        <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{item.label}</span>
-                      </label>
-                    ))}
+                    {CLEARABLE_COLLECTIONS.map(item => {
+                      const locked = isClearing || !!clearJob;
+                      const removed = clearJob?.results?.[item.id] || 0;
+
+                      return (
+                        <label
+                          key={item.id}
+                          className={`flex items-center gap-3 p-3 rounded-xl border transition-colors ${locked ? 'opacity-60 cursor-not-allowed' : 'hover:bg-[var(--bg-secondary)] cursor-pointer'}`}
+                          style={{ borderColor: 'var(--border-color)' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedCollections.includes(item.id)}
+                            disabled={locked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedCollections([...selectedCollections, item.id]);
+                              } else {
+                                setSelectedCollections(selectedCollections.filter(id => id !== item.id));
+                              }
+                            }}
+                            className="w-4 h-4 rounded focus:ring-red-500"
+                            style={{ color: 'var(--status-error)' }}
+                          />
+                          <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{item.label}</span>
+                          {removed > 0 && (
+                            <span className="ml-auto text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ backgroundColor: 'var(--status-cancelled-bg)', color: 'var(--status-cancelled-text)' }}>
+                              {removed} removido(s)
+                            </span>
+                          )}
+                        </label>
+                      );
+                    })}
                   </div>
+                  <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                    Unidades, usuários, auditoria, notificações, comentários e tarefas não são afetados.
+                  </p>
                 </div>
 
                 <div className="space-y-2">
@@ -1188,42 +1364,158 @@ export const UserManagement: React.FC = () => {
                     type="password"
                     value={clearDataPassword}
                     onChange={(e) => setClearDataPassword(e.target.value)}
+                    disabled={isClearing || !!clearJob}
                     placeholder="Digite sua senha atual"
-                    className="w-full px-4 py-2.5 border rounded-xl focus:ring-2 transition-all outline-none"
-                    style={{ 
-                      backgroundColor: 'var(--bg-secondary)', 
-                      borderColor: 'var(--border-color)', 
+                    className="w-full px-4 py-2.5 border rounded-xl focus:ring-2 transition-all outline-none disabled:opacity-60"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      borderColor: 'var(--border-color)',
                       color: 'var(--text-primary)',
                       boxShadow: 'none'
                     }}
                     onFocus={(e) => e.currentTarget.style.borderColor = 'var(--status-error)'}
                     onBlur={(e) => e.currentTarget.style.borderColor = 'var(--border-color)'}
                   />
+                  <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                    A senha é validada pelo Firebase Authentication e não é enviada ao serviço de limpeza.
+                  </p>
                 </div>
+
+                {clearError && (
+                  <div className="p-3 rounded-xl border flex gap-2 text-xs" style={{ backgroundColor: 'var(--status-cancelled-bg)', borderColor: 'color-mix(in srgb, var(--status-cancelled-text), transparent 80%)', color: 'var(--status-cancelled-text)' }}>
+                    <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold">Não foi possível concluir</p>
+                      <p className="mt-1 leading-relaxed">{clearError}</p>
+                    </div>
+                  </div>
+                )}
+
+                {clearJob && (
+                  <div
+                    className="p-4 rounded-xl border space-y-3"
+                    style={{
+                      backgroundColor: 'var(--bg-secondary)',
+                      borderColor: clearJob.status === 'completed' ? 'var(--status-success)' : 'var(--border-color)'
+                    }}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        {clearJob.status === 'completed' ? (
+                          <Check className="w-4 h-4" style={{ color: 'var(--status-success)' }} />
+                        ) : clearJob.status === 'failed' ? (
+                          <AlertCircle className="w-4 h-4" style={{ color: 'var(--status-cancelled-text)' }} />
+                        ) : (
+                          <RefreshCw className="w-4 h-4 animate-spin" style={{ color: 'var(--text-secondary)' }} />
+                        )}
+                        <span className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>
+                          {clearJob.status === 'completed'
+                            ? 'Limpeza concluída'
+                            : clearJob.status === 'failed'
+                            ? 'Limpeza interrompida'
+                            : 'Removendo registros...'}
+                        </span>
+                      </div>
+                      <span className="text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>
+                        {clearJob.totalDeleted}/{clearJob.totalTarget}
+                      </span>
+                    </div>
+
+                    <div className="h-2 rounded-full overflow-hidden" style={{ backgroundColor: 'var(--border-color)' }}>
+                      <div
+                        className="h-full transition-all duration-300"
+                        style={{
+                          width: `${Math.min(100, Math.max(0, clearJob.progress || 0))}%`,
+                          backgroundColor: clearJob.status === 'completed' ? 'var(--status-success)' : 'var(--status-cancelled-text)'
+                        }}
+                      />
+                    </div>
+
+                    {clearJob.status === 'running' && clearJob.currentCollection && (
+                      <p className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                        Removendo: {COLLECTION_LABELS[clearJob.currentCollection] || clearJob.currentCollection}
+                      </p>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                      {CLEARABLE_COLLECTIONS.filter(item => selectedCollections.includes(item.id)).map(item => (
+                        <div key={item.id} className="flex items-center justify-between gap-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+                          <span>{item.label}</span>
+                          <span className="font-bold" style={{ color: 'var(--text-primary)' }}>{clearJob.results?.[item.id] || 0}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {clearJob.status === 'completed' && (
+                      <p className="text-[11px]" style={{ color: 'var(--status-success)' }}>
+                        {clearJob.totalDeleted} registro(s) removido(s). Evento registrado na auditoria.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 <div className="flex gap-3 pt-2">
                   <button
-                    onClick={() => setIsClearDataModalOpen(false)}
-                    className="flex-1 px-4 py-2.5 rounded-xl transition-colors font-medium"
+                    onClick={handleCloseClearModal}
+                    disabled={isClearing || clearJob?.status === 'running'}
+                    className="flex-1 px-4 py-2.5 rounded-xl transition-colors font-medium disabled:opacity-50"
                     style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
                   >
-                    Cancelar
+                    {clearJob?.status === 'completed' ? 'Fechar' : 'Cancelar'}
                   </button>
-                  <button
-                    onClick={handleClearData}
-                    disabled={isClearing || !clearDataPassword || selectedCollections.length === 0}
-                    className="flex-1 px-4 py-2.5 text-white rounded-xl transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
-                    style={{ backgroundColor: 'var(--status-error)' }}
-                  >
-                    {isClearing ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        Limpando...
-                      </>
-                    ) : (
-                      'Confirmar Exclusão'
-                    )}
-                  </button>
+
+                  {clearJob?.status === 'running' && clearError ? (
+                    <button
+                      onClick={handleResumeClear}
+                      disabled={isClearing}
+                      className="flex-1 px-4 py-2.5 text-white rounded-xl transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                      style={{ backgroundColor: 'var(--status-warning)' }}
+                    >
+                      {isClearing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Retomando...
+                        </>
+                      ) : (
+                        'Retomar limpeza'
+                      )}
+                    </button>
+                  ) : clearJob?.status === 'failed' ? (
+                    <button
+                      onClick={() => {
+                        setClearJob(null);
+                        setClearError('');
+                      }}
+                      className="flex-1 px-4 py-2.5 text-white rounded-xl transition-colors font-medium flex items-center justify-center gap-2"
+                      style={{ backgroundColor: 'var(--status-error)' }}
+                    >
+                      Tentar novamente
+                    </button>
+                  ) : clearJob?.status === 'completed' ? (
+                    <button
+                      onClick={handleCloseClearModal}
+                      className="flex-1 px-4 py-2.5 text-white rounded-xl transition-colors font-medium flex items-center justify-center gap-2"
+                      style={{ backgroundColor: 'var(--status-success)' }}
+                    >
+                      Fechar
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleClearData}
+                      disabled={isClearing || !clearDataPassword || selectedCollections.length === 0}
+                      className="flex-1 px-4 py-2.5 text-white rounded-xl transition-colors font-medium disabled:opacity-50 flex items-center justify-center gap-2"
+                      style={{ backgroundColor: 'var(--status-error)' }}
+                    >
+                      {isClearing ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          Limpando...
+                        </>
+                      ) : (
+                        'Confirmar Exclusão'
+                      )}
+                    </button>
+                  )}
                 </div>
               </div>
             </motion.div>

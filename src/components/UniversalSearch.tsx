@@ -18,6 +18,24 @@ export const UniversalSearch: React.FC = () => {
   const navigate = useNavigate();
   const searchRef = useRef<HTMLDivElement>(null);
 
+  const getSearchText = (type: string, item: any) => {
+    const base = Object.values(item)
+      .filter((value) => value !== null && value !== undefined && typeof value !== 'object')
+      .map((value) => String(value))
+      .join(' ');
+
+    const authorizedPeople =
+      type === 'printer' && Array.isArray(item.authorized_people)
+        ? item.authorized_people
+            .map((id: string) => collaborators.find((collaborator: any) => collaborator.id === id))
+            .filter(Boolean)
+            .map((collaborator: any) => `${collaborator.name || ''} ${collaborator.login || ''} ${collaborator.email || ''}`)
+            .join(' ')
+        : '';
+
+    return `${base} ${authorizedPeople}`.toLowerCase();
+  };
+
   useEffect(() => {
     if (!searchTerm.trim()) {
       setResults([]);
@@ -36,11 +54,7 @@ export const UniversalSearch: React.FC = () => {
     ];
 
     const filteredResults = collections.map(col => {
-      const filtered = col.items.filter(item => {
-        return Object.values(item).some(val => 
-          val && String(val).toLowerCase().includes(searchStr)
-        );
-      }).slice(0, 5); // Limit to 5 results per category
+      const filtered = col.items.filter(item => getSearchText(col.type, item).includes(searchStr)).slice(0, 5); // Limit to 5 results per category
 
       return { ...col, items: filtered };
     }).filter(col => col.items.length > 0);
@@ -86,9 +100,9 @@ export const UniversalSearch: React.FC = () => {
       case 'collaborator': return item.name;
       case 'machine': return item.hostname;
       case 'server': return item.brand_model || item.hostname;
-      case 'printer': return `${item.brand} ${item.model}`;
-      case 'ups': return `${item.brand} ${item.model}`;
-      case 'license': return item.name;
+      case 'printer': return item.name || `${item.brand || ''} ${item.model || ''}`.trim() || 'Impressora';
+      case 'ups': return item.name || `${item.brand || ''} ${item.model || ''}`.trim() || 'Nobreak';
+      case 'license': return item.softwareName || item.name;
       default: return item.id;
     }
   };
@@ -98,9 +112,9 @@ export const UniversalSearch: React.FC = () => {
       case 'collaborator': return item.login;
       case 'machine': return item.serialNumber;
       case 'server': return item.unit;
-      case 'printer': return item.ipAddress;
-      case 'ups': return item.location || item.serialNumber;
-      case 'license': return item.key;
+      case 'printer': return [item.mac_address, item.ipAddress].filter(Boolean).join(' • ');
+      case 'ups': return [item.location, item.serialNumber].filter(Boolean).join(' • ');
+      case 'license': return item.licenseKey;
       default: return '';
     }
   };

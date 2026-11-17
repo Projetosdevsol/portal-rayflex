@@ -19,6 +19,8 @@ import { db, handleFirestoreError, OperationType } from '../firebase';
 import { useData } from '../contexts/DataContext';
 import { logAction } from '../utils/audit';
 import { encryptData } from '../utils/crypto';
+import { getStatusLabel, normalizeStatusValue } from '../utils/status';
+import { getErrorMessage } from '../utils/api';
 
 interface DataImporterProps {
   isOpen: boolean;
@@ -30,6 +32,149 @@ interface DataImporterProps {
 }
 
 type Step = 'upload' | 'sheets' | 'mapping' | 'preview' | 'importing';
+
+/** Accent/punctuation-insensitive key used to compare labels and headers. */
+const normalizeImportKey = (value: unknown): string =>
+  String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+/**
+ * Extra header aliases seen in real spreadsheets. The field label and key are
+ * always accepted too; this only bridges names like "NOME" -> name,
+ * "MAC" -> mac_address and "PESSOAS AUTORIZADAS" -> authorized_people.
+ */
+const HEADER_ALIASES: Record<string, string[]> = {
+  name: ['nome', 'name', 'nome do ativo', 'nome do equipamento', 'nome da impressora', 'nome do nobreak', 'descricao', 'equipamento'],
+  brand: ['marca', 'brand', 'fabricante'],
+  model: ['modelo', 'model'],
+  connectionType: ['tipo de conexao', 'conexao', 'connection type', 'tipo conexao', 'tipo de rede'],
+  ipAddress: ['ip', 'endereco ip', 'ip address', 'endereco ip compartilhamento', 'ipaddress', 'endereco de ip'],
+  mac_address: ['mac', 'mac address', 'endereco mac', 'mac_address', 'endereco fisico', 'mac address fisico'],
+  authorized_people: ['pessoas autorizadas', 'pessoas autorizadas para uso', 'autorizados', 'usuarios autorizados', 'pessoas', 'colaboradores', 'authorized people', 'authorized_people'],
+  assignedUserIds: ['usuarios', 'usuarios atribuidos', 'assigned users', 'assigneduserids', 'colaboradores', 'responsaveis'],
+  location: ['localizacao', 'local', 'location', 'sala', 'setor'],
+  unit: ['unidade', 'unit', 'filial'],
+  status: ['status', 'situacao', 'estado'],
+  nextMaintenanceDate: ['proxima manutencao', 'proxima manutencao data', 'next maintenance', 'nextmaintenancedate', 'data da proxima manutencao'],
+  powerCapacity: ['potencia', 'potencia va w', 'power capacity', 'powercapacity'],
+  serialNumber: ['numero de serie', 'serial', 'serial number', 'serialnumber', 'ns'],
+  connectedDevices: ['equipamentos conectados', 'connected devices', 'connecteddevices'],
+  batteryChangeDate: ['ultima troca de bateria', 'battery change date', 'batterychangedate', 'troca de bateria'],
+  softwareName: ['software', 'nome do software', 'software name', 'softwarename'],
+  licenseKey: ['chave de licenca', 'license key', 'licensekey', 'chave'],
+  expirationDate: ['data de expiracao', 'expiracao', 'expiration date', 'expirationdate', 'validade'],
+  hostname: ['hostname', 'nome da maquina', 'maquina', 'computador'],
+  collaborator_id: ['colaborador', 'usuario', 'responsavel', 'collaborator'],
+  login: ['login', 'usuario de rede', 'user'],
+  email: ['email', 'e mail', 'correio'],
+  sector_responsible: ['setor responsavel', 'setor', 'responsavel'],
+  photoUrl: ['foto', 'foto do ativo', 'imagem', 'photo', 'photourl'],
+};
+
+const getFieldAliases = (field: any): string[] => {
+  const lastKey = String(field.key).split('.').pop() || field.key;
+  const lastLabel = String(field.label).split(' > ').pop() || field.label;
+  const values = [
+    field.key,
+    lastKey,
+    field.label,
+    lastLabel,
+    ...(HEADER_ALIASES[lastKey] || []),
+  ];
+  return Array.from(new Set(values.map(normalizeImportKey).filter(Boolean)));
+};
+
+/**
+ * Picks the real header row. Spreadsheets often start with a title, a logo or
+ * an empty line, which used to be captured as the header and broke mapping.
+ */
+const findHeaderRowIndex = (rows: any[][], fields: any[]): number => {
+  const limit = Math.min(rows.length, 12);
+  let bestIndex = 0;
+  let bestScore = -1;
+
+  for (let i = 0; i < limit; i++) {
+    const row = Array.isArray(rows[i]) ? rows[i] : [];
+    const cells = row.map(normalizeImportKey).filter(Boolean);
+    if (cells.length < 2) continue;
+
+    let score = cells.length;
+    fields.forEach((field) => {
+      const aliases = getFieldAliases(field);
+      if (cells.some((cell) => aliases.includes(cell))) score += 5;
+    });
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = i;
+    }
+  }
+
+  return bestIndex;
+};
+
+/** Accepts comma, semicolon, pipe and newline separated lists. */
+const splitListValue = (value: unknown): string[] => {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  return String(value ?? '')
+    .split(/[\n,;|]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const resolveCollaboratorId = (token: string, collaborators: any[]): string | null => {
+  const cleaned = token.replace(/\([^)]*\)/g, '').trim();
+  const normalized = normalizeImportKey(cleaned);
+  if (!normalized) return null;
+
+  const match = collaborators.find((collaborator: any) =>
+    collaborator.id === token ||
+    normalizeImportKey(collaborator.name) === normalized ||
+    normalizeImportKey(collaborator.login) === normalized ||
+    normalizeImportKey(collaborator.email) === normalized
+  );
+
+  return match?.id || null;
+};
+
+const STATUS_GROUPS: Record<string, string[]> = {
+  active: ['active', 'available', 'online', 'in-use'],
+  inactive: ['inactive', 'offline', 'deactivated', 'retired'],
+  maintenance: ['maintenance', 'pending'],
+};
+
+/** Normalizes enum values, including PT-BR status names and connection types. */
+const normalizeEnumValue = (field: any, value: unknown): string => {
+  const raw = String(value ?? '').trim();
+  if (!raw || !Array.isArray(field.enum)) return raw;
+
+  const normalized = normalizeImportKey(raw);
+  const direct = field.enum.find(
+    (option: string) => normalizeImportKey(option) === normalized
+  );
+  if (direct) return direct;
+
+  if (field.key === 'connectionType' || field.key.endsWith('.connectionType')) {
+    if (['wifi', 'wi fi', 'wireless', 'sem fio'].includes(normalized)) return 'WIFI';
+    if (['rede', 'cabo', 'cabo de rede', 'ethernet', 'lan', 'rj45'].includes(normalized)) return 'Cabo de rede';
+    if (['usb', 'cabo usb'].includes(normalized)) return 'USB';
+  }
+
+  if (field.key === 'status' || field.key.endsWith('.status')) {
+    const semantic = normalizeStatusValue(raw);
+    const group = Object.values(STATUS_GROUPS).find((values) => values.includes(semantic));
+    if (group) {
+      const match = field.enum.find((option: string) => group.includes(option));
+      if (match) return match;
+    }
+  }
+
+  return raw;
+};
 
 export const DataImporter: React.FC<DataImporterProps> = ({ 
   isOpen, 
@@ -50,7 +195,7 @@ export const DataImporter: React.FC<DataImporterProps> = ({
   const [importProgress, setImportProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const { machines } = useData();
+  const { machines, collaborators } = useData();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const stepsInfo = [
@@ -75,7 +220,10 @@ export const DataImporter: React.FC<DataImporterProps> = ({
           label: fullLabel,
           required: required.includes(key),
           enum: prop.enum,
-          type: prop.type
+          type: prop.type,
+          format: prop.format,
+          items: prop.items,
+          ref: prop.$ref
         });
       }
     });
@@ -118,28 +266,44 @@ export const DataImporter: React.FC<DataImporterProps> = ({
   const processSheet = (wb: XLSX.WorkBook, sheetName: string) => {
     try {
       const worksheet = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][] ;
+      const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: '' }) as any[][];
 
-      if (rows.length < 2) {
+      const headerRowIndex = findHeaderRowIndex(rows, schemaFields);
+
+      if (rows.length <= headerRowIndex + 1) {
         setError(`A planilha "${sheetName}" deve conter pelo menos uma linha de cabeçalho e uma linha de dados.`);
         return;
       }
 
-      const fileHeaders = rows[0].map(h => String(h || '').trim());
-      const dataRows = rows.slice(1).filter(row => row.some(cell => cell !== null && cell !== undefined && cell !== ''));
+      const columnCount = Math.max(
+        ...rows.slice(headerRowIndex).map((row) => (Array.isArray(row) ? row.length : 0)),
+        0
+      );
+
+      // Duplicate/empty headers would collapse columns; give every column a
+      // stable unique name so mapping and preview keep them apart.
+      const usedHeaders = new Map<string, number>();
+      const fileHeaders = Array.from({ length: columnCount }, (_, index) => {
+        const raw = String(rows[headerRowIndex]?.[index] ?? '').trim();
+        const base = raw || `Coluna ${index + 1}`;
+        const seen = usedHeaders.get(base) || 0;
+        usedHeaders.set(base, seen + 1);
+        return seen === 0 ? base : `${base} (${seen + 1})`;
+      });
+
+      const dataRows = rows
+        .slice(headerRowIndex + 1)
+        .filter(row => Array.isArray(row) && row.some(cell => String(cell ?? '').trim() !== ''));
 
       setHeaders(fileHeaders);
       setFileData(dataRows);
       setSelectedSheet(sheetName);
-      
-      // Auto-mapping logic
+
+      // Auto-mapping with normalized aliases (NOME, MAC, PESSOAS AUTORIZADAS...).
       const initialMapping: Record<string, string> = {};
       schemaFields.forEach(field => {
-        const match = fileHeaders.find(h => 
-          h.toLowerCase() === field.label.toLowerCase() || 
-          h.toLowerCase() === field.key.toLowerCase() ||
-          (field.key.includes('.') && h.toLowerCase() === field.key.split('.').pop()?.toLowerCase())
-        );
+        const aliases = getFieldAliases(field);
+        const match = fileHeaders.find(header => aliases.includes(normalizeImportKey(header)));
         if (match) initialMapping[field.key] = match;
       });
 
@@ -159,40 +323,72 @@ export const DataImporter: React.FC<DataImporterProps> = ({
       for (let i = 0; i < total; i++) {
         const row = fileData[i];
         const mappedData: any = {};
-        
+
+        const setNestedValue = (target: any, siteKey: string, value: any) => {
+          if (siteKey.includes('.')) {
+            const [parent, child] = siteKey.split('.');
+            if (!target[parent]) target[parent] = {};
+            target[parent][child] = value;
+          } else {
+            target[siteKey] = value;
+          }
+        };
+
+        /**
+         * Converts one spreadsheet cell into the value stored in Firestore:
+         * - lists become deduped arrays (comma/newline/semicolon separated);
+         * - collaborator names/logins become collaborator IDs (N:N);
+         * - status/connection enums are normalized to the stored keys.
+         */
+        const applyValue = (siteKey: string, rawValue: any, field: any) => {
+          if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') return;
+
+          if (field?.type === 'array') {
+            const tokens = splitListValue(rawValue);
+            if (tokens.length === 0) return;
+
+            if (field.items?.$ref === 'collaborator') {
+              const ids = tokens
+                .map((token) => resolveCollaboratorId(token, collaborators))
+                .filter((id): id is string => Boolean(id));
+              if (ids.length > 0) setNestedValue(mappedData, siteKey, Array.from(new Set(ids)));
+            } else {
+              setNestedValue(mappedData, siteKey, Array.from(new Set(tokens)));
+            }
+            return;
+          }
+
+          if (field?.enum) {
+            setNestedValue(mappedData, siteKey, normalizeEnumValue(field, rawValue));
+            return;
+          }
+
+          // Single references (e.g. machine -> collaborator) accept an ID, a
+          // name, a login or an e-mail. Unknown text is preserved as typed.
+          if (field?.ref === 'collaborator') {
+            const raw = String(rawValue).trim();
+            setNestedValue(
+              mappedData,
+              siteKey,
+              resolveCollaboratorId(raw, collaborators) || raw
+            );
+            return;
+          }
+
+          setNestedValue(mappedData, siteKey, String(rawValue).trim());
+        };
+
         Object.entries(mapping).forEach(([siteKey, fileHeader]) => {
           const headerIndex = headers.indexOf(fileHeader);
-          if (headerIndex !== -1) {
-            let value = row[headerIndex];
-            if (value !== undefined && value !== null) {
-              const field = schemaFields.find(f => f.key === siteKey);
-              if (field?.type === 'array') {
-                const arrayVal = typeof value === 'string' 
-                  ? value.split(',').map(v => v.trim()).filter(Boolean)
-                  : [value];
-                mappedData[siteKey] = arrayVal;
-              } else if (siteKey.includes('.')) {
-                const [parent, child] = siteKey.split('.');
-                if (!mappedData[parent]) mappedData[parent] = {};
-                mappedData[parent][child] = String(value).trim();
-              } else {
-                mappedData[siteKey] = String(value).trim();
-              }
-            }
-          }
+          if (headerIndex === -1) return;
+          const field = schemaFields.find(f => f.key === siteKey);
+          applyValue(siteKey, row[headerIndex], field);
         });
 
         // Apply fixed values
         Object.entries(fixedValues).forEach(([siteKey, value]) => {
-          if (value !== undefined && value !== null && value !== '') {
-            if (siteKey.includes('.')) {
-              const [parent, child] = siteKey.split('.');
-              if (!mappedData[parent]) mappedData[parent] = {};
-              mappedData[parent][child] = String(value).trim();
-            } else {
-              mappedData[siteKey] = String(value).trim();
-            }
-          }
+          const field = schemaFields.find(f => f.key === siteKey);
+          applyValue(siteKey, value, field);
         });
 
         // Add default values for missing required fields if possible
@@ -201,7 +397,13 @@ export const DataImporter: React.FC<DataImporterProps> = ({
             ? mappedData[field.key.split('.')[0]]?.[field.key.split('.')[1]]
             : mappedData[field.key];
 
-          if (field.required && !value) {
+          const isMissing =
+            value === undefined ||
+            value === null ||
+            value === '' ||
+            (Array.isArray(value) && value.length === 0);
+
+          if (field.required && isMissing) {
             // Find the property in the schema
             let prop = schema.properties;
             const keys = field.key.split('.');
@@ -213,12 +415,13 @@ export const DataImporter: React.FC<DataImporterProps> = ({
             });
 
             if (prop.enum) {
+              const defaultValue = normalizeEnumValue(field, prop.enum[0]);
               if (field.key.includes('.')) {
                 const [parent, child] = field.key.split('.');
                 if (!mappedData[parent]) mappedData[parent] = {};
-                mappedData[parent][child] = prop.enum[0];
+                mappedData[parent][child] = defaultValue;
               } else {
-                mappedData[field.key] = prop.enum[0];
+                mappedData[field.key] = defaultValue;
               }
             }
           }
@@ -252,10 +455,19 @@ export const DataImporter: React.FC<DataImporterProps> = ({
 
         // Custom logic for licenses
         if (collectionName === 'licenses') {
-          if (mappedData.assignedUserIds && Array.isArray(mappedData.assignedUserIds)) {
+          if (Array.isArray(mappedData.assignedUserIds)) {
+            mappedData.assignedUserIds = Array.from(new Set(mappedData.assignedUserIds));
             mappedData.used = mappedData.assignedUserIds.length;
           }
         }
+
+        // Never persist duplicate N:N relations (authorized people, licenses).
+        Object.keys(schema.properties || {}).forEach((fieldKey) => {
+          const prop = schema.properties[fieldKey];
+          if (prop?.type === 'array' && prop.items?.$ref && Array.isArray(mappedData[fieldKey])) {
+            mappedData[fieldKey] = Array.from(new Set(mappedData[fieldKey]));
+          }
+        });
 
         if (Object.keys(mappedData).length > 0) {
           try {
@@ -273,19 +485,12 @@ export const DataImporter: React.FC<DataImporterProps> = ({
       reset();
     } catch (err: any) {
       console.error('Import error:', err);
-      let errorMessage = 'Erro durante a importação. Algumas linhas podem ter sido processadas.';
-      if (err instanceof Error) {
-        try {
-          // Try to parse the JSON error from handleFirestoreError
-          const parsedError = JSON.parse(err.message);
-          if (parsedError.error) {
-            errorMessage = `Erro: ${parsedError.error}`;
-          }
-        } catch (e) {
-          errorMessage = `Erro: ${err.message}`;
-        }
-      }
-      setError(errorMessage);
+      setError(
+        getErrorMessage(
+          err,
+          'Erro durante a importação. Algumas linhas podem ter sido processadas.'
+        )
+      );
       setStep('preview');
     }
   };
@@ -521,7 +726,9 @@ export const DataImporter: React.FC<DataImporterProps> = ({
                               <option value="">Não importar</option>
                               <optgroup label="Valor Fixo para todos">
                                 {field.enum.map((opt: string) => (
-                                  <option key={`fixed:${opt}`} value={`fixed:${opt}`}>{opt}</option>
+                                  <option key={`fixed:${opt}`} value={`fixed:${opt}`}>
+                                    {field.key === 'status' || field.key.endsWith('.status') ? getStatusLabel(opt) : opt}
+                                  </option>
                                 ))}
                               </optgroup>
                               <optgroup label="Mapear da Planilha">
@@ -595,10 +802,15 @@ export const DataImporter: React.FC<DataImporterProps> = ({
                         <tr key={i} className="transition-colors">
                           {schemaFields.filter(f => mapping[f.key] || fixedValues[f.key]).map(field => {
                             const headerIndex = headers.indexOf(mapping[field.key]);
-                            const value = fixedValues[field.key] || (headerIndex !== -1 ? row[headerIndex] : '-');
+                            const rawValue = fixedValues[field.key] || (headerIndex !== -1 ? row[headerIndex] : '');
+                            const value = Array.isArray(rawValue) ? rawValue.join(', ') : rawValue;
+                            const displayValue =
+                              (field.key === 'status' || field.key.endsWith('.status')) && value
+                                ? getStatusLabel(value)
+                                : value;
                             return (
                               <td key={field.key} className="px-4 py-3 text-xs truncate max-w-[150px]" style={{ color: 'var(--text-primary)' }}>
-                                {String(value || '-')}
+                                {String(displayValue || '-')}
                               </td>
                             );
                           })}

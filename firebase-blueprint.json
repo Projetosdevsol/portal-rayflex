@@ -72,10 +72,17 @@
       "description": "A printer asset.",
       "type": "object",
       "properties": {
+        "name": { "type": "string", "description": "Nome" },
         "brand": { "type": "string", "description": "Marca" },
         "model": { "type": "string", "description": "Modelo" },
         "connectionType": { "type": "string", "enum": ["USB", "WIFI", "Cabo de rede"], "description": "Tipo de Conexão" },
-        "ipAddress": { "type": "string", "description": "Endereço IP/Compartilhamento" },
+        "ipAddress": { "type": "string", "description": "Endereço IP" },
+        "mac_address": { "type": "string", "description": "MAC" },
+        "authorized_people": {
+          "type": "array",
+          "items": { "type": "string", "$ref": "collaborator" },
+          "description": "Pessoas Autorizadas para Uso"
+        },
         "location": { "type": "string", "description": "Localização" },
         "unit": { "type": "string", "description": "Unidade" },
         "status": { "type": "string", "enum": ["online", "offline", "maintenance"], "description": "Status" },
@@ -89,6 +96,7 @@
       "description": "A UPS / nobreak asset.",
       "type": "object",
       "properties": {
+        "name": { "type": "string", "description": "Nome" },
         "brand": { "type": "string", "description": "Marca" },
         "model": { "type": "string", "description": "Modelo" },
         "powerCapacity": { "type": "string", "description": "Potência (VA/W)" },

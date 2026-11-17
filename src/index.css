@@ -53,8 +53,12 @@
 
     --status-pending-bg: #FEF3C7;
     --status-pending-text: #92400E;
+    --status-warning-bg: #FEF3C7;
+    --status-warning-text: #92400E;
     --status-progress-bg: #DBEAFE;
     --status-progress-text: #1E40AF;
+    --status-info-bg: #DBEAFE;
+    --status-info-text: #1E40AF;
     --status-completed-bg: #D1FAE5;
     --status-completed-text: #065F46;
     --status-cancelled-bg: #FEE2E2;
@@ -86,8 +90,12 @@
 
     --status-pending-bg: rgba(251, 191, 36, 0.1);
     --status-pending-text: #FBBF24;
+    --status-warning-bg: rgba(251, 191, 36, 0.1);
+    --status-warning-text: #FBBF24;
     --status-progress-bg: rgba(59, 130, 246, 0.1);
     --status-progress-text: #60A5FA;
+    --status-info-bg: rgba(59, 130, 246, 0.1);
+    --status-info-text: #60A5FA;
     --status-completed-bg: rgba(16, 185, 129, 0.1);
     --status-completed-text: #34D399;
     --status-cancelled-bg: rgba(239, 68, 68, 0.1);

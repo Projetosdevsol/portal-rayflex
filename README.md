@@ -31,6 +31,15 @@ Plataforma web para **gestão de ativos de TI**: inventário de hardware, contro
 - **Tarefas** (`/tasks`), **Auditoria** (`/audit-reports`), **Usuários** (`/users`) e **Configurações** (`/settings`).
 - Busca universal, notificações, comentários por ativo, temas claro/escuro e controle de acesso por papéis (`viewer`, `editor`, `manager`, `admin`, `super_admin`).
 
+### 🧹 Limpeza de dados (Super Admin)
+- Disponível em **Usuários → Zona de Perigo → Iniciar Limpeza de Dados**.
+- Escopo aprovado: `machines`, `collaborators`, `printers`, `ups`, `servers`, `licenses`.
+- **Não** remove `units`, `users`, `auditLogs`, `notifications`, `comments` ou `tasks`.
+- Executada server-side pela Cloud Function `api`; o cliente nunca apaga documentos diretamente.
+- Exige reautenticação por senha (`auth_time` recente validado no backend) e perfil `super_admin` (doc `users/{uid}`, custom claim ou identidade de super admin já reconhecida).
+- Exclusão em lotes de 400 documentos, com paginação, retomada automática de jobs longos e progresso por coleção.
+- Cada execução gera um evento `clear_data` em `auditLogs` com autor, data, coleções e contagem removida.
+
 ## 🛠️ Tecnologias
 
 - **Frontend:** React 19, TypeScript, React Router 7, Tailwind CSS 4, Motion, Recharts, Lucide Icons
@@ -66,21 +75,42 @@ npm run dev
 | `npm run lint` | Verificação de tipos (`tsc --noEmit`) |
 | `npm run clean` | Remove a pasta `dist/` |
 
-## 🔥 Firebase: regras e deploy
+## 🔥 Firebase: regras, Functions e deploy
 
 O repositório já contém a configuração do CLI:
 
-- `firebase.json` — mapeia `firestore.rules` e `storage.rules`
+- `firebase.json` — regras do Firestore/Storage, Functions e Hosting
 - `.firebaserc` — projeto padrão: `portal-rayflex`
 - `firebase-blueprint.json` — modelo de dados (entidades e coleções)
+- `functions/` — Cloud Function `api` que atende `/api/**` (o Hosting faz rewrite para ela)
 
 ```bash
 firebase login
-firebase deploy --only firestore:rules,storage
+
+# Dependências da function (uma vez)
+npm --prefix functions install
+
+# Publica API + regras + Hosting
+firebase deploy --only functions,firestore:rules,storage,hosting
 ```
 
-> Para publicar só uma parte: `firebase deploy --only firestore:rules` ou `firebase deploy --only storage`.
+> Para publicar só uma parte: `firebase deploy --only firestore:rules`, `firebase deploy --only functions` ou `firebase deploy --only hosting`.
 > O deploy das regras é obrigatório após Pull — sem ele, coleções novas (ex.: `units`, `ups`) ficam inacessíveis.
+> O rewrite `/api/**` **precisa** existir antes do rewrite SPA `** → /index.html`; caso contrário, chamadas de API recebem HTML e falham com `Unexpected token '<'`.
+
+### Região da Function
+A function `api` está em `us-central1` (`functions/src/index.ts`). Se mudar a região, atualize também o bloco `hosting.rewrites` em `firebase.json`.
+
+### Teste em preview do Hosting
+```bash
+npm run build
+firebase hosting:channel:deploy preview-limpeza --only hosting,functions
+```
+Valide no canal gerado:
+1. Login com um `super_admin`.
+2. `GET /api/health` deve retornar `{"ok":true,...}` (não HTML).
+3. A limpeza deve pedir a senha, exibir progresso e concluir com contagem.
+4. `auditLogs` deve conter o evento `clear_data` com `results` por coleção.
 
 ## 📁 Estrutura do projeto
 
@@ -96,7 +126,11 @@ firebase deploy --only firestore:rules,storage
 ├── firebase.json / .firebaserc
 ├── firestore.rules / storage.rules
 ├── firebase-blueprint.json
-└── server.ts            # Servidor Express (produção)
+├── functions/
+│   └── src/
+│       ├── index.ts     # Cloud Function HTTPS `api`
+│       └── api/         # Rotas compartilhadas (users, notifications, clear-data)
+└── server.ts            # Servidor Express (desenvolvimento/Cloud Run)
 ```
 
 ## 🔐 Papéis e permissões

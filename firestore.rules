@@ -18,7 +18,7 @@ service cloud.firestore {
     // Fields: machine_id, brand_model, configuration, programs, cals, storage, application, bios_date, status, etc.
     //
     // Collection: printers
-    // Fields: brand, model, ipAddress, location, nextMaintenanceDate, status, photoUrl, etc.
+    // Fields: name, brand, model, ipAddress, mac_address, authorized_people, location, nextMaintenanceDate, status, photoUrl, etc.
     //
     // Collection: ups
     // Fields: brand, model, powerCapacity, serialNumber, location, unit, status, batteryChangeDate, nextMaintenanceDate, connectedDevices, photoUrl, etc.
@@ -47,6 +47,8 @@ service cloud.firestore {
     function isSuperAdmin() {
       return isAuthenticated() && (
         request.auth.uid == "ocH5vnmyMbWElrB2G0xmnlmXzgs1" ||
+        request.auth.token.get('role', '') == 'super_admin' ||
+        request.auth.token.get('email', '') == "suporte@rayflex.com.br" ||
         request.auth.token.get('email', '') == "suporte@solution-sp.com.br" ||
         (request.auth.token.get('email', '') == "projetossolutiondev@gmail.com" && request.auth.token.get('email_verified', false) == true) ||
         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 

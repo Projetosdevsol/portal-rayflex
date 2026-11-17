@@ -17,8 +17,11 @@ import {
   formatCep,
   fetchAddressByCep,
   checkCnpj,
+  isValidCnpjChecksum,
   type CnpjCheck,
 } from '../utils/brasilApi';
+import { getErrorMessage } from '../utils/api';
+import { StatusBadge } from './StatusBadge';
 import {
   Building2,
   Plus,
@@ -106,7 +109,7 @@ export const Units: React.FC = () => {
   const [selectedUnit, setSelectedUnit] = useState<any>(null);
   const [formData, setFormData] = useState<UnitForm>(EMPTY_FORM);
   const [itemToDelete, setItemToDelete] = useState<any>(null);
-  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'warning' } | null>(null);
 
   const [cepLoading, setCepLoading] = useState(false);
   const [cepError, setCepError] = useState<string | null>(null);
@@ -114,7 +117,7 @@ export const Units: React.FC = () => {
   const [cnpjCheck, setCnpjCheck] = useState<CnpjCheck>({ status: 'idle', message: '' });
   const [lastCheckedCnpj, setLastCheckedCnpj] = useState('');
 
-  const showToast = (message: string, type: 'success' | 'error') => {
+  const showToast = (message: string, type: 'success' | 'error' | 'warning') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
   };
@@ -176,7 +179,7 @@ export const Units: React.FC = () => {
       status: unit.status || 'active',
     });
     const digits = onlyDigits(unit.cnpj || '');
-    if (digits.length === 14) {
+    if (digits.length === 14 && isValidCnpjChecksum(digits)) {
       setCnpjCheck({
         status: 'valid',
         message: unit.razaoSocial
@@ -184,6 +187,12 @@ export const Units: React.FC = () => {
           : 'CNPJ verificado anteriormente. Clique em Validar para reconfirmar.',
       });
       setLastCheckedCnpj(digits);
+    } else if (digits.length > 0) {
+      setCnpjCheck({
+        status: 'invalid',
+        message: 'CNPJ inválido (dígitos verificadores). Corrija o número antes de salvar.',
+      });
+      setLastCheckedCnpj('');
     } else {
       setCnpjCheck({ status: 'idle', message: '' });
       setLastCheckedCnpj('');
@@ -242,15 +251,30 @@ export const Units: React.FC = () => {
     }
 
     const cnpjDigits = onlyDigits(formData.cnpj);
+    let cnpjWasOffline = false;
     if (cnpjDigits) {
+      // Local checksum first: no network needed to reject an impossible number.
+      if (cnpjDigits.length !== 14 || !isValidCnpjChecksum(cnpjDigits)) {
+        showToast('CNPJ inválido. Confira os 14 dígitos antes de salvar.', 'error');
+        return;
+      }
+
       let check = cnpjCheck;
-      if (lastCheckedCnpj !== cnpjDigits) {
+      const needsCheck =
+        lastCheckedCnpj !== cnpjDigits ||
+        (check.status !== 'valid' && check.status !== 'offline');
+
+      if (needsCheck) {
         check = await handleCnpjValidate();
       }
       if (check.status === 'invalid') {
-        showToast('CNPJ inválido. Corrija o número antes de salvar.', 'error');
+        showToast(
+          check.message || 'CNPJ inválido. Corrija o número antes de salvar.',
+          'error'
+        );
         return;
       }
+      cnpjWasOffline = check.status === 'offline';
     }
 
     const duplicate = units.find(
@@ -277,21 +301,30 @@ export const Units: React.FC = () => {
         void id;
         await updateDoc(doc(db, 'units', editingUnit.id), updateData);
         await logAction('update', 'units', editingUnit.id, editingUnit, updateData, `Updated unit ${payload.name}`);
-        showToast('Unidade atualizada com sucesso!', 'success');
       } else {
         const docRef = await addDoc(collection(db, 'units'), payload);
         await logAction('create', 'units', docRef.id, null, payload, `Created unit ${payload.name}`);
-        showToast('Unidade criada com sucesso!', 'success');
       }
       setIsModalOpen(false);
       setEditingUnit(null);
       setFormData(EMPTY_FORM);
-      if (cnpjDigits && cnpjCheck.status === 'offline') {
-        showToast('Unidade salva, mas o CNPJ não pôde ser confirmado (API fora do ar).', 'error');
+
+      // The unit is saved either way. A failing Brasil API is only a warning,
+      // never a reason to keep the user from saving their work.
+      if (cnpjWasOffline) {
+        showToast(
+          'Unidade salva. O CNPJ não pôde ser confirmado agora porque a Brasil API está indisponível.',
+          'warning'
+        );
+      } else {
+        showToast(
+          editingUnit ? 'Unidade atualizada com sucesso!' : 'Unidade criada com sucesso!',
+          'success'
+        );
       }
     } catch (error) {
       console.error('Error saving unit:', error);
-      showToast('Erro ao salvar unidade.', 'error');
+      showToast(getErrorMessage(error, 'Erro ao salvar unidade.'), 'error');
     }
   };
 
@@ -434,15 +467,11 @@ export const Units: React.FC = () => {
                         </p>
                       </div>
                     </div>
-                    <span
-                      className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase flex-shrink-0"
-                      style={{
-                        backgroundColor: 'var(--bg-secondary)',
-                        color: unit.status === 'active' ? 'var(--status-success)' : unit.status === 'deactivated' ? 'var(--status-cancelled-text)' : 'var(--status-warning)',
-                      }}
-                    >
-                      {unit.status === 'active' ? 'Ativa' : unit.status === 'deactivated' ? 'Desativada' : 'Inativa'}
-                    </span>
+                    <StatusBadge
+                      status={unit.status}
+                      label={unit.status === 'active' ? 'Ativa' : unit.status === 'deactivated' ? 'Desativada' : 'Inativa'}
+                      className="flex-shrink-0"
+                    />
                   </div>
 
                   <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
@@ -880,8 +909,8 @@ export const Units: React.FC = () => {
             exit={{ opacity: 0, y: 50 }}
             className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border"
             style={{
-              backgroundColor: toast.type === 'success' ? 'rgb(5, 150, 105)' : 'rgb(220, 38, 38)',
-              borderColor: toast.type === 'success' ? 'rgb(4, 120, 87)' : 'rgb(185, 28, 28)',
+              backgroundColor: toast.type === 'success' ? 'rgb(5, 150, 105)' : toast.type === 'warning' ? 'rgb(217, 119, 6)' : 'rgb(220, 38, 38)',
+              borderColor: toast.type === 'success' ? 'rgb(4, 120, 87)' : toast.type === 'warning' ? 'rgb(180, 83, 9)' : 'rgb(185, 28, 28)',
               color: 'white',
             }}
           >

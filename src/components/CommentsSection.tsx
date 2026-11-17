@@ -16,7 +16,6 @@ import {
   collection, 
   query, 
   where, 
-  orderBy, 
   onSnapshot, 
   addDoc, 
   updateDoc,
@@ -58,22 +57,37 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({ entityId, enti
   useEffect(() => {
     if (!entityId) return;
 
+    // No orderBy here on purpose: equality filters on entityId + entityType
+    // work with Firestore's automatic single-field indexes, while adding
+    // orderBy requires a composite index that was never deployed. Sorting in
+    // memory keeps the comments section working without an index deploy.
     const q = query(
       collection(db, 'comments'),
       where('entityId', '==', entityId),
-      where('entityType', '==', entityType),
-      orderBy('createdAt', 'asc')
+      where('entityType', '==', entityType)
     );
 
+    const toMillis = (value: any): number => {
+      if (!value) return 0;
+      if (typeof value.toMillis === 'function') return value.toMillis();
+      if (typeof value.toDate === 'function') return value.toDate().getTime();
+      const parsed = new Date(value).getTime();
+      return Number.isNaN(parsed) ? 0 : parsed;
+    };
+
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const fetchedComments = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Comment[];
+      const fetchedComments = snapshot.docs
+        .map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Comment[];
+      fetchedComments.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
       setComments(fetchedComments);
       setLoading(false);
     }, (error) => {
-      handleFirestoreError(error, OperationType.GET, 'comments');
+      // A listener error must not throw: it would bubble out of the snapshot
+      // callback and be reported as an unrelated crash.
+      console.error('Erro ao carregar comentários:', error);
       setLoading(false);
     });
 

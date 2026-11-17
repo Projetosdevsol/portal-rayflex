@@ -19,6 +19,19 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   }
 };
 
+/**
+ * Super-admin identities kept in sync with firestore.rules and the API
+ * (`functions/src/api/auth.ts`). The profile document is the normal source of
+ * truth; these identities ensure a legitimate super admin is never locked out
+ * by a missing or stale profile.
+ */
+const SUPER_ADMIN_UID = 'ocH5vnmyMbWElrB2G0xmnlmXzgs1';
+const SUPER_ADMIN_EMAILS = [
+  'suporte@rayflex.com.br',
+  'suporte@solution-sp.com.br',
+];
+const SUPER_ADMIN_VERIFIED_EMAIL = 'projetossolutiondev@gmail.com';
+
 const getIPAddress = async () => {
   try {
     const response = await fetch('https://api.ipify.org?format=json');
@@ -52,6 +65,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [tokenRole, setTokenRole] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -59,6 +73,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (firebaseUser) {
         try {
           setUser(firebaseUser);
+
+          // Custom claims are the same source used by firestore.rules and the
+          // API, so a super_admin claim works even without a profile document.
+          let claimRole = '';
+          try {
+            const tokenResult = await firebaseUser.getIdTokenResult();
+            const claims = tokenResult.claims as Record<string, unknown>;
+            claimRole =
+              claims.super_admin === true
+                ? 'super_admin'
+                : typeof claims.role === 'string'
+                  ? claims.role
+                  : '';
+          } catch (claimError) {
+            console.error('Failed to read custom claims:', claimError);
+          }
+          setTokenRole(claimRole);
+
           const userDocRef = doc(db, 'users', firebaseUser.uid);
           const userDoc = await getDoc(userDocRef);
           
@@ -86,7 +118,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
               displayName: firebaseUser.displayName || '',
-              role: (firebaseUser.email === 'projetossolutiondev@gmail.com' || firebaseUser.email === 'suporte@rayflex.com.br') ? 'super_admin' : 'viewer',
+              role:
+                claimRole === 'super_admin' ||
+                firebaseUser.uid === SUPER_ADMIN_UID ||
+                (!!firebaseUser.email &&
+                  SUPER_ADMIN_EMAILS.includes(firebaseUser.email)) ||
+                (firebaseUser.email === SUPER_ADMIN_VERIFIED_EMAIL &&
+                  firebaseUser.emailVerified)
+                  ? 'super_admin'
+                  : 'viewer',
               loginHistory: [loginEntry]
             };
             try {
@@ -103,6 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } else {
         setUser(null);
         setProfile(null);
+        setTokenRole('');
       }
       setLoading(false);
     });
@@ -161,13 +202,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setProfile({ ...profile, preferences: updatedPrefs as UserPreferences });
   };
 
-  const isSuperAdmin = profile?.role === 'super_admin' || 
-    (user?.email === 'projetossolutiondev@gmail.com' && user?.emailVerified) ||
-    (user?.email === 'suporte@rayflex.com.br');
-  const isAdmin = profile?.role === 'admin';
-  const isManager = profile?.role === 'manager';
-  const isEditor = profile?.role === 'editor';
-  const isViewer = profile?.role === 'viewer';
+  const isSuperAdmin =
+    profile?.role === 'super_admin' ||
+    tokenRole === 'super_admin' ||
+    user?.uid === SUPER_ADMIN_UID ||
+    (!!user?.email && SUPER_ADMIN_EMAILS.includes(user.email)) ||
+    (user?.email === SUPER_ADMIN_VERIFIED_EMAIL && user?.emailVerified === true);
+  const isAdmin = profile?.role === 'admin' || tokenRole === 'admin';
+  const isManager = profile?.role === 'manager' || tokenRole === 'manager';
+  const isEditor = profile?.role === 'editor' || tokenRole === 'editor';
+  const isViewer = profile?.role === 'viewer' || tokenRole === 'viewer';
   
   const hasPermission = (permission: string) => {
     return isSuperAdmin || (profile?.permissions?.includes(permission) ?? false);

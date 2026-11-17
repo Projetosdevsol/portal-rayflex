@@ -67,10 +67,13 @@ export interface Server {
 
 export interface Printer {
   id: string;
+  name?: string;
   brand: string;
   model: string;
   connectionType: 'USB' | 'WIFI' | 'Cabo de rede';
   ipAddress: string; // Endereço IP/Compartilhamento
+  mac_address?: string;
+  authorized_people?: string[]; // Collaborator IDs (N:N, no duplicates)
   location: string;
   status: 'online' | 'offline' | 'maintenance';
   unit: string;
@@ -80,6 +83,7 @@ export interface Printer {
 
 export interface Ups {
   id: string;
+  name?: string;
   brand: string;
   model: string;
   powerCapacity?: string;

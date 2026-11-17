@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, doc, updateDoc, serverTimestamp, addDoc } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase';
 import { Collaborator, Machine } from '../types';
+import { useData } from '../contexts/DataContext';
 import { logAction } from '../utils/audit';
-import { Search, Eye, EyeOff, Lock, ChevronUp, ChevronDown, ArrowUpDown, LayoutGrid, List, Filter, Monitor, Cpu, HardDrive, MemoryStick, FileText, Key, Barcode, Calendar, CheckSquare, Square, Trash2, X, Plus, ArrowRight, Upload, ShieldCheck, AlertCircle } from 'lucide-react';
+import { Search, Eye, EyeOff, Lock, ChevronUp, ChevronDown, ArrowUpDown, LayoutGrid, List, Filter, Monitor, Cpu, HardDrive, MemoryStick, FileText, Key, Barcode, Calendar, CheckSquare, Square, Trash2, X, Plus, ArrowRight, Upload, ShieldCheck, AlertCircle, Printer } from 'lucide-react';
 import { DoubleScrollContainer } from './DoubleScrollContainer';
 import { decryptData } from '../utils/crypto';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,6 +40,14 @@ const SecureField: React.FC<{ encryptedValue?: string }> = ({ encryptedValue }) 
   );
 };
 
+/** Safe label for machines that may not have a hostname yet. */
+const machineLabel = (machine: any): string =>
+  machine?.hostname || machine?.model || machine?.id || 'Máquina';
+
+/** Sorting must never throw when a legacy machine has no hostname. */
+const byMachineLabel = (a: any, b: any) =>
+  machineLabel(a).localeCompare(machineLabel(b), 'pt-BR', { sensitivity: 'base' });
+
 export const Controle: React.FC = () => {
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [machines, setMachines] = useState<Machine[]>([]);
@@ -51,6 +60,7 @@ export const Controle: React.FC = () => {
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
   const [filterSector, setFilterSector] = useState('');
   const [filterMachine, setFilterMachine] = useState('');
+  const [filterPrinter, setFilterPrinter] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
@@ -66,6 +76,7 @@ export const Controle: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
 
   const { user, loading: authLoading, isSuperAdmin, isAdmin, isManager } = useAuth();
+  const { printers } = useData();
 
   const isAuthorized = isSuperAdmin || isAdmin;
 
@@ -89,7 +100,7 @@ export const Controle: React.FC = () => {
 
   const getMachineHostname = (machineId?: string) => {
     const machine = machines.find(m => m.id === machineId);
-    return machine ? machine.hostname : 'N/A';
+    return machine ? machineLabel(machine) : 'N/A';
   };
 
   const getMachineDetails = (machineId?: string) => {
@@ -114,7 +125,27 @@ export const Controle: React.FC = () => {
 
   const sectors = Array.from(new Set(collaborators.map(c => c.sector_responsible).filter(Boolean))).sort();
   const assignedMachineIds = Array.from(new Set(collaborators.map(c => c.machine_id).filter(Boolean)));
-  const assignedMachines = machines.filter(m => assignedMachineIds.includes(m.id)).sort((a, b) => a.hostname.localeCompare(b.hostname));
+  const assignedMachines = machines
+    .filter(m => assignedMachineIds.includes(m.id))
+    .sort(byMachineLabel);
+
+  /** Printers where this collaborator is explicitly authorized (N:N). */
+  const getAuthorizedPrinters = (collaboratorId?: string) => {
+    if (!collaboratorId) return [];
+    return printers.filter((printer: any) =>
+      Array.isArray(printer.authorized_people) &&
+      printer.authorized_people.includes(collaboratorId)
+    );
+  };
+
+  const printersWithAuthorization = printers
+    .filter((printer: any) => Array.isArray(printer.authorized_people) && printer.authorized_people.length > 0)
+    .sort((a: any, b: any) =>
+      `${a.name || ''} ${a.brand || ''} ${a.model || ''}`.localeCompare(
+        `${b.name || ''} ${b.brand || ''} ${b.model || ''}`,
+        'pt-BR'
+      )
+    );
 
   const filteredData = collaborators
     .filter(c => {
@@ -124,15 +155,22 @@ export const Controle: React.FC = () => {
 
       const searchStr = searchTerm.toLowerCase();
       const machine = getMachineDetails(c.machine_id);
+      const authorizedPrinterLabels = getAuthorizedPrinters(c.id)
+        .map((printer: any) => `${printer.name || ''} ${printer.brand || ''} ${printer.model || ''}`)
+        .join(' ');
       const matchesSearch = !searchStr || 
                             (c.name?.toLowerCase() || '').includes(searchStr) ||
                             (c.email?.toLowerCase() || '').includes(searchStr) ||
                             (c.login?.toLowerCase() || '').includes(searchStr) ||
-                            (machine?.hostname?.toLowerCase() || '').includes(searchStr);
+                            (machine?.hostname?.toLowerCase() || '').includes(searchStr) ||
+                            authorizedPrinterLabels.toLowerCase().includes(searchStr);
       const matchesSector = filterSector ? c.sector_responsible === filterSector : true;
       const matchesMachine = filterMachine ? c.machine_id === filterMachine : true;
+      const matchesPrinter = filterPrinter
+        ? getAuthorizedPrinters(c.id).some((printer: any) => printer.id === filterPrinter)
+        : true;
       
-      return matchesSearch && matchesSector && matchesMachine;
+      return matchesSearch && matchesSector && matchesMachine && matchesPrinter;
     })
     .sort((a: any, b: any) => {
       let valA = a[sortField] || '';
@@ -179,20 +217,20 @@ export const Controle: React.FC = () => {
     
     // Check pattern for hostname if it's a new assignment
     const machine = machines.find(m => m.id === machineId);
-    if (machine && !/^SOL\d{2}RAY$/i.test(machine.hostname)) {
-      if (!confirm(`O hostname ${machine.hostname} não segue o padrão SOL##RAY. Deseja continuar?`)) return;
+    if (machine && !/^SOL\d{2}RAY$/i.test(machine.hostname || '')) {
+      if (!confirm(`O hostname ${machineLabel(machine)} não segue o padrão SOL##RAY. Deseja continuar?`)) return;
     }
 
     setIsBulkUpdating(true);
     try {
       const machine = machines.find(m => m.id === machineId);
-      const machineName = machine ? machine.hostname : 'N/A';
+      const machineName = machine ? machineLabel(machine) : 'N/A';
 
       for (const id of selectedIds) {
         const collab = collaborators.find(c => c.id === id);
         const oldMachineId = collab?.machine_id;
         const oldMachine = machines.find(m => m.id === oldMachineId);
-        const oldMachineName = oldMachine ? oldMachine.hostname : 'N/A';
+        const oldMachineName = oldMachine ? machineLabel(oldMachine) : 'N/A';
 
         await updateDoc(doc(db, 'collaborators', id), {
           machine_id: machineId,
@@ -279,7 +317,7 @@ export const Controle: React.FC = () => {
           collabId,
           { machine_id: null },
           { machine_id: machineId },
-          `Vinculação em massa: Máquina ${machine.hostname}. Evidência: ${fileUrl}`,
+          `Vinculação em massa: Máquina ${machineLabel(machine)}. Evidência: ${fileUrl}`,
           justification,
           'medium'
         );
@@ -367,7 +405,24 @@ export const Controle: React.FC = () => {
                 >
                   <option value="">Todas as Máquinas</option>
                   {assignedMachines.map(m => (
-                    <option key={m.id} value={m.id}>{m.hostname}</option>
+                    <option key={m.id} value={m.id}>{machineLabel(m)}</option>
+                  ))}
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)] pointer-events-none" />
+              </div>
+
+              <div className="relative flex-1 sm:w-48">
+                <Printer className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)]" size={14} />
+                <select
+                  value={filterPrinter}
+                  onChange={(e) => setFilterPrinter(e.target.value)}
+                  className="w-full pl-9 pr-8 py-3 bg-[var(--bg-secondary)] border border-[var(--border-color)] rounded-xl focus:ring-2 focus:ring-[var(--brand-primary)]/10 transition-all outline-none text-xs font-bold text-[var(--text-primary)] appearance-none cursor-pointer"
+                >
+                  <option value="">Todas as Impressoras</option>
+                  {printersWithAuthorization.map((printer: any) => (
+                    <option key={printer.id} value={printer.id}>
+                      {printer.name || `${printer.brand || ''} ${printer.model || ''}`.trim() || 'Impressora'}
+                    </option>
                   ))}
                 </select>
                 <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-secondary)] pointer-events-none" />
@@ -414,10 +469,10 @@ export const Controle: React.FC = () => {
                 }}
               >
                 <option value="">Selecionar Máquina...</option>
-                {machines
-                  .sort((a, b) => a.hostname.localeCompare(b.hostname))
+                {[...machines]
+                  .sort(byMachineLabel)
                   .map(m => (
-                    <option key={m.id} value={m.id}>{m.hostname}</option>
+                    <option key={m.id} value={m.id}>{machineLabel(m)}</option>
                   ))
                 }
               </select>
@@ -461,6 +516,7 @@ export const Controle: React.FC = () => {
                   { key: 'sector_responsible', label: 'Setor' },
                   { key: 'login', label: 'Login Rede' },
                   { key: 'machine_id', label: 'ID Máquina' },
+                  { key: 'authorized_printers', label: 'Impressoras Autorizadas' },
                   { key: 'ip_address', label: 'IP Local' },
                   { key: 'login_password', label: 'Senha Login' },
                   { key: 'email', label: 'E-mail' },
@@ -543,6 +599,27 @@ export const Controle: React.FC = () => {
                       })()}
                     </div>
                   </td>
+                  <td className="px-6 py-5">
+                    {(() => {
+                      const authorized = getAuthorizedPrinters(c.id);
+                      if (authorized.length === 0) {
+                        return <span className="text-xs text-[var(--text-secondary)]">-</span>;
+                      }
+                      return (
+                        <div className="flex flex-wrap gap-1 max-w-[220px]">
+                          {authorized.map((printer: any) => (
+                            <span
+                              key={printer.id}
+                              className="px-2 py-1 bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-md text-[10px] font-bold uppercase tracking-wider border border-[var(--border-color)]"
+                              title={[printer.mac_address, printer.ipAddress].filter(Boolean).join(' • ')}
+                            >
+                              {printer.name || `${printer.brand || ''} ${printer.model || ''}`.trim() || 'Impressora'}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </td>
                   <td className="px-6 py-5 text-xs text-[var(--text-secondary)] font-medium">
                     {getMachineDetails(c.machine_id)?.ipAddress || '-'}
                   </td>
@@ -556,7 +633,7 @@ export const Controle: React.FC = () => {
                 </tr>
                 {expandedId === c.id && c.machine_id && (
                   <tr className="bg-[var(--bg-secondary)]/50 border-b border-[var(--border-color)]">
-                    <td colSpan={9} className="px-6 py-4">
+                    <td colSpan={10} className="px-6 py-4">
                       {(() => {
                         const m = getMachineDetails(c.machine_id);
                         if (!m) return <p className="text-sm text-[var(--text-secondary)]">Detalhes da máquina não encontrados.</p>;
@@ -569,7 +646,7 @@ export const Controle: React.FC = () => {
                               <div>
                                 <p className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Hostname</p>
                                 <div className="flex items-center gap-2">
-                                  <p className="text-sm font-bold text-[var(--text-primary)]">{m.hostname}</p>
+                                  <p className="text-sm font-bold text-[var(--text-primary)]">{machineLabel(m)}</p>
                                   {isRecentComment(m.lastCommentAt) && (
                                     <div 
                                       className="w-2 h-2 rounded-full bg-[var(--accent-primary)] animate-pulse" 
@@ -722,7 +799,7 @@ export const Controle: React.FC = () => {
                           </div>
                           <div>
                             <p className="text-[9px] font-bold text-[var(--text-secondary)] uppercase tracking-wider">Hostname</p>
-                            <p className="text-xs font-bold text-[var(--text-primary)]">{m.hostname}</p>
+                            <p className="text-xs font-bold text-[var(--text-primary)]">{machineLabel(m)}</p>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -833,6 +910,29 @@ export const Controle: React.FC = () => {
                     <span className="text-[9px] font-bold text-[var(--text-secondary)] uppercase tracking-[0.2em] block mb-1.5">Autodesk</span>
                     <SecureField encryptedValue={c.autodesk_credentials} />
                   </div>
+                </div>
+
+                <div className="col-span-full">
+                  <span className="text-[9px] font-bold text-[var(--text-secondary)] uppercase tracking-[0.2em] block mb-1.5">Impressoras Autorizadas</span>
+                  {(() => {
+                    const authorized = getAuthorizedPrinters(c.id);
+                    if (authorized.length === 0) {
+                      return <p className="text-xs text-[var(--text-secondary)]">Nenhuma impressora autorizada.</p>;
+                    }
+                    return (
+                      <div className="flex flex-wrap gap-2">
+                        {authorized.map((printer: any) => (
+                          <span
+                            key={printer.id}
+                            className="px-3 py-1.5 bg-[var(--bg-secondary)] text-[var(--text-primary)] rounded-lg text-[10px] font-bold uppercase tracking-wider border border-[var(--border-color)]"
+                            title={[printer.mac_address, printer.ipAddress].filter(Boolean).join(' • ')}
+                          >
+                            {printer.name || `${printer.brand || ''} ${printer.model || ''}`.trim() || 'Impressora'}
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -993,10 +1093,11 @@ export const Controle: React.FC = () => {
                         {machines
                           .filter(m => {
                             const isAvailable = !m.assignedTo && m.status !== 'retired' && m.status !== 'deactivated';
-                            const matchesSearch = !bulkMachineSearch || m.hostname.toLowerCase().includes(bulkMachineSearch.toLowerCase());
+                            const term = bulkMachineSearch.toLowerCase();
+                            const matchesSearch = !bulkMachineSearch || machineLabel(m).toLowerCase().includes(term);
                             return isAvailable && matchesSearch;
                           })
-                          .sort((a, b) => a.hostname.localeCompare(b.hostname))
+                          .sort(byMachineLabel)
                           .map(m => (
                             <div 
                               key={m.id}
@@ -1010,7 +1111,7 @@ export const Controle: React.FC = () => {
                                   {selectedMachines.includes(m.id) && <CheckSquare size={14} />}
                                 </div>
                                 <div>
-                                  <p className={`text-sm font-bold ${selectedMachines.includes(m.id) ? 'text-[var(--bg-primary)]' : 'text-[var(--text-primary)]'}`}>{m.hostname}</p>
+                                  <p className={`text-sm font-bold ${selectedMachines.includes(m.id) ? 'text-[var(--bg-primary)]' : 'text-[var(--text-primary)]'}`}>{machineLabel(m)}</p>
                                   <p className={`text-[10px] font-bold uppercase tracking-wider ${selectedMachines.includes(m.id) ? 'text-[var(--bg-primary)]/70' : 'text-[var(--text-secondary)]'}`}>{m.model} • {m.ipAddress || 'Sem IP'}</p>
                                 </div>
                               </div>

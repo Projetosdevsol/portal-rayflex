@@ -27,6 +27,7 @@ import {
   CheckSquare
 } from 'lucide-react';
 import blueprint from '../firebase-blueprint.json';
+import { StatusBadge } from './components/StatusBadge';
 
 const ProtectedRoute = ({ children, superAdminOnly = false }: { children: React.ReactNode, superAdminOnly?: boolean }) => {
   const { user, loading, isSuperAdmin } = useAuth();
@@ -75,17 +76,7 @@ const AppContent = () => {
               { key: 'email_password', label: 'Senha E-mail' },
               { key: 'sector_responsible', label: 'Setor/Responsável' },
               { key: 'allocation_sector', label: 'Setor Alocado' },
-              { key: 'status', label: 'Status', render: (val) => (
-                <span 
-                  className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase"
-                  style={{ 
-                    backgroundColor: 'var(--bg-secondary)',
-                    color: val === 'active' ? 'var(--status-success)' : val === 'deactivated' ? 'var(--status-cancelled-text)' : 'var(--text-secondary)'
-                  }}
-                >
-                  {val === 'active' ? 'Ativado' : 'Desativado'}
-                </span>
-              )}
+              { key: 'status', label: 'Status', render: (val) => <StatusBadge status={val} /> }
             ]}
           />
         </ProtectedRoute>
@@ -120,27 +111,7 @@ const AppContent = () => {
               { key: 'activated', label: 'Ativada?' },
               { key: 'usb_enabled', label: 'USB?' },
               { key: 'unit', label: 'Unidade' },
-              { key: 'status', label: 'Status', render: (val) => (
-                <div className="flex items-center gap-2">
-                  <div 
-                    className="w-2 h-2 rounded-full"
-                    style={{ 
-                      backgroundColor: val === 'available' ? 'var(--status-success)' : val === 'in-use' ? 'var(--status-info)' : val === 'maintenance' ? 'var(--status-warning)' : val === 'deactivated' ? 'var(--status-cancelled-text)' : 'var(--text-secondary)'
-                    }}
-                  />
-                  <span 
-                    className="text-[10px] font-bold uppercase"
-                    style={{ 
-                      color: 'var(--text-primary)'
-                    }}
-                  >
-                    {val === 'available' ? 'Ativado' : 
-                     val === 'in-use' ? 'em uso' : 
-                     val === 'maintenance' ? 'manutenção' : 
-                     'Desativado'}
-                  </span>
-                </div>
-              )}
+              { key: 'status', label: 'Status', render: (val) => <StatusBadge status={val} /> }
             ]}
           />
         </ProtectedRoute>
@@ -162,17 +133,7 @@ const AppContent = () => {
               { key: 'storage', label: 'Armazenamento' },
               { key: 'application', label: 'Aplicação' },
               { key: 'bios_date', label: 'Data BIOS' },
-              { key: 'status', label: 'Status', render: (val) => (
-                <span 
-                  className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase"
-                  style={{ 
-                    backgroundColor: 'var(--bg-secondary)',
-                    color: val === 'online' ? 'var(--status-success)' : val === 'offline' ? 'var(--status-cancelled-text)' : 'var(--status-warning)'
-                  }}
-                >
-                  {val === 'online' ? 'Ativado' : val === 'offline' ? 'Desativado' : 'manutenção'}
-                </span>
-              )}
+              { key: 'status', label: 'Status', render: (val) => <StatusBadge status={val} /> }
             ]}
           />
         </ProtectedRoute>
@@ -187,13 +148,16 @@ const AppContent = () => {
             schema={blueprint.entities.printer}
             columns={[
               { key: 'photoUrl', label: 'Foto', render: (val) => val ? <img src={val} alt="Impressora" className="w-12 h-12 rounded-xl object-cover border" style={{ borderColor: 'var(--border-color)' }} referrerPolicy="no-referrer" /> : <span className="text-xs italic opacity-60">Sem foto</span> },
+              { key: 'name', label: 'Nome' },
               { key: 'brand', label: 'Marca' },
               { key: 'model', label: 'Modelo' },
               { key: 'connectionType', label: 'Tipo de Conexão' },
-              { key: 'ipAddress', label: 'Endereço IP/Compartilhamento' },
+              { key: 'ipAddress', label: 'Endereço IP' },
+              { key: 'mac_address', label: 'MAC' },
+              { key: 'authorized_people', label: 'Pessoas Autorizadas' },
               { key: 'location', label: 'Localização' },
               { key: 'nextMaintenanceDate', label: 'Próxima Manutenção' },
-              { key: 'status', label: 'Status' }
+              { key: 'status', label: 'Status', render: (val) => <StatusBadge status={val} /> }
             ]}
           />
         </ProtectedRoute>
@@ -208,6 +172,7 @@ const AppContent = () => {
             schema={blueprint.entities.ups}
             columns={[
               { key: 'photoUrl', label: 'Foto', render: (val) => val ? <img src={val} alt="Nobreak" className="w-12 h-12 rounded-xl object-cover border" style={{ borderColor: 'var(--border-color)' }} referrerPolicy="no-referrer" /> : <span className="text-xs italic opacity-60">Sem foto</span> },
+              { key: 'name', label: 'Nome' },
               { key: 'brand', label: 'Marca' },
               { key: 'model', label: 'Modelo' },
               { key: 'powerCapacity', label: 'Potência (VA/W)' },
@@ -217,7 +182,7 @@ const AppContent = () => {
               { key: 'connectedDevices', label: 'Equipamentos Conectados' },
               { key: 'batteryChangeDate', label: 'Última Troca de Bateria' },
               { key: 'nextMaintenanceDate', label: 'Próxima Manutenção' },
-              { key: 'status', label: 'Status' }
+              { key: 'status', label: 'Status', render: (val) => <StatusBadge status={val} /> }
             ]}
           />
         </ProtectedRoute>
